@@ -1,0 +1,14 @@
+ARG BASE_IMAGE=python:3.11
+FROM ${BASE_IMAGE}
+
+ARG SWE_REX_VERSION=1.3.0
+
+RUN if command -v swerex-remote >/dev/null 2>&1; then \
+        swerex-remote --version; \
+    else \
+        python3 -m venv /opt/swe-rex \
+        && /opt/swe-rex/bin/pip install --no-cache-dir "swe-rex==${SWE_REX_VERSION}" \
+        && ln -sf /opt/swe-rex/bin/swerex-remote /usr/local/bin/swerex-remote; \
+    fi \
+    && command -v swerex-remote \
+    && swerex-remote --version
