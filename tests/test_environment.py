@@ -43,8 +43,14 @@ def test_training_dependencies_are_not_installed_by_default() -> None:
     assert all(name not in default_dependencies for name in training_dependencies)
 
 
-def test_jupyterlab_is_available() -> None:
-    assert importlib.import_module("jupyterlab") is not None
+def test_notebook_extra_declares_expected_dependencies() -> None:
+    with (ROOT / "pyproject.toml").open("rb") as project_file:
+        project = tomllib.load(project_file)
+
+    dependencies = project["project"]["optional-dependencies"]["notebook"]
+    package_names = {dependency.split(">=", maxsplit=1)[0] for dependency in dependencies}
+
+    assert {"ipykernel", "ipywidgets", "jupyterlab", "matplotlib", "seaborn"} <= package_names
 
 
 def test_openai_compatible_client_can_be_initialized_without_network() -> None:
