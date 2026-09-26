@@ -210,7 +210,8 @@ def _command_for_task(
         model,
         "--use_apptainer",
         str(use_apptainer).lower(),
-        f"--env.deployment.startup_timeout={int(DEFAULT_SWE_REX_STARTUP_TIMEOUT_SECONDS)}",
+        "--startup_timeout",
+        str(int(DEFAULT_SWE_REX_STARTUP_TIMEOUT_SECONDS)),
         "--output_file",
         str(output_dir / "all_preds.jsonl"),
     ]
