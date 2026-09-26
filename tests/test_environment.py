@@ -42,3 +42,16 @@ def test_training_dependencies_are_not_installed_by_default() -> None:
 
     assert all(name not in default_dependencies for name in training_dependencies)
 
+
+def test_jupyterlab_is_available() -> None:
+    assert importlib.import_module("jupyterlab") is not None
+
+
+def test_openai_compatible_client_can_be_initialized_without_network() -> None:
+    from openai import OpenAI
+
+    with OpenAI(
+        api_key="test-key",
+        base_url="http://localhost:20128/v1",
+    ) as client:
+        assert str(client.base_url) == "http://localhost:20128/v1/"
