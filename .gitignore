@@ -3,10 +3,15 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.log
+*.pred
 .pytest_cache/
 .ruff_cache/
 .ipynb_checkpoints/
 dist/
+
+# Generated local test artifact not included in the research branch
+tests/test_omnicode_collector.py
 
 # Generated experiment artifacts
 data/
@@ -17,3 +22,7 @@ wandb/
 # Model and dataset caches
 .cache/
 huggingface/
+
+# Local benchmark checkout and generated teacher data
+external/
+teacher_dataset/
