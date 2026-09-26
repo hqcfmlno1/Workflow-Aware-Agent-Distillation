@@ -1,0 +1,40 @@
+Metadata-Version: 2.4
+Name: workflow-aware-agent-distillation
+Version: 0.1.0
+Summary: Experiments for workflow-aware distillation of interactive coding agents.
+Requires-Python: <3.12,>=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: datasets>=3.5
+Requires-Dist: httpx>=0.28
+Requires-Dist: jsonlines>=4.0
+Requires-Dist: numpy>=1.26
+Requires-Dist: openai>=1.75
+Requires-Dist: orjson>=3.10
+Requires-Dist: pandas>=2.2
+Requires-Dist: pyarrow>=19.0
+Requires-Dist: pydantic-settings>=2.8
+Requires-Dist: python-dotenv>=1.0
+Requires-Dist: rich>=13.9
+Requires-Dist: scikit-learn>=1.6
+Requires-Dist: scipy>=1.15
+Requires-Dist: tenacity>=9.0
+Requires-Dist: tqdm>=4.67
+Requires-Dist: typer>=0.15
+Requires-Dist: wandb>=0.19
+Provides-Extra: notebook
+Requires-Dist: ipykernel>=6.29; extra == "notebook"
+Requires-Dist: ipywidgets>=8.1; extra == "notebook"
+Requires-Dist: jupyterlab>=4.4; extra == "notebook"
+Requires-Dist: matplotlib>=3.10; extra == "notebook"
+Requires-Dist: seaborn>=0.13; extra == "notebook"
+Provides-Extra: train
+Requires-Dist: accelerate>=1.6; extra == "train"
+Requires-Dist: bitsandbytes>=0.45; extra == "train"
+Requires-Dist: peft>=0.15; extra == "train"
+Requires-Dist: safetensors>=0.5; extra == "train"
+Requires-Dist: sentencepiece>=0.2; extra == "train"
+Requires-Dist: torch>=2.6; extra == "train"
+Requires-Dist: transformers>=4.51; extra == "train"
+Requires-Dist: trl>=0.17; extra == "train"
+
+# Workflow-Aware-Agent-Distillation

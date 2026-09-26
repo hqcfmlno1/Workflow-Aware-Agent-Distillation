@@ -1,0 +1,9 @@
+README.md
+pyproject.toml
+src/workflow_aware_agent_distillation.egg-info/PKG-INFO
+src/workflow_aware_agent_distillation.egg-info/SOURCES.txt
+src/workflow_aware_agent_distillation.egg-info/dependency_links.txt
+src/workflow_aware_agent_distillation.egg-info/requires.txt
+src/workflow_aware_agent_distillation.egg-info/top_level.txt
+src/workflow_distillation/__init__.py
+tests/test_environment.py

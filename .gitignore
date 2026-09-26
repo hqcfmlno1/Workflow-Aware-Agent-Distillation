@@ -1,0 +1,18 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+dist/
+
+# Generated experiment artifacts
+data/
+outputs/
+checkpoints/
+wandb/
+
+# Model and dataset caches
+.cache/
+huggingface/
