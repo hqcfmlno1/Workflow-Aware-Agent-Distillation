@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "workflow-aware-agent-distillation"
+version = "0.1.0"
+description = "Experiments for workflow-aware distillation of interactive coding agents."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "datasets>=3.5",
+    "httpx>=0.28",
+    "jsonlines>=4.0",
+    "numpy>=1.26",
+    "openai>=1.75",
+    "orjson>=3.10",
+    "pandas>=2.2",
+    "pyarrow>=19.0",
+    "pydantic-settings>=2.8",
+    "python-dotenv>=1.0",
+    "rich>=13.9",
+    "scikit-learn>=1.6",
+    "scipy>=1.15",
+    "tenacity>=9.0",
+    "tqdm>=4.67",
+    "typer>=0.15",
+    "wandb>=0.19",
+]
+
+[project.optional-dependencies]
+notebook = [
+    "ipykernel>=6.29",
+    "ipywidgets>=8.1",
+    "jupyterlab>=4.4",
+    "matplotlib>=3.10",
+    "seaborn>=0.13",
+]
+train = [
+    "accelerate>=1.6",
+    "bitsandbytes>=0.45",
+    "peft>=0.15",
+    "safetensors>=0.5",
+    "sentencepiece>=0.2",
+    "torch>=2.6",
+    "transformers>=4.51",
+    "trl>=0.17",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.26",
+    "ruff>=0.11",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
