@@ -26,3 +26,6 @@ huggingface/
 # Local benchmark checkout and generated teacher data
 external/
 teacher_dataset/
+
+# Local agent planning artifacts
+docs/superpowers/
