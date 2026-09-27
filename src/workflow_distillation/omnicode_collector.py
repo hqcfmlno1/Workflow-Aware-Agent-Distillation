@@ -446,6 +446,9 @@ def _load_final_patch(run_dir: Path, task_id: str) -> str | None:
     if patch_path is not None:
         try:
             return patch_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            # Git/SWE-Agent may emit patches using the Windows code page.
+            return patch_path.read_text(encoding="cp1252")
         except OSError:
             pass
 
