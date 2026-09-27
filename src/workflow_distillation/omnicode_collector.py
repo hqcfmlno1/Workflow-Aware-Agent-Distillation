@@ -357,7 +357,7 @@ def _containers_to_remove(
         state = row.get("status", "").split(maxsplit=1)[0].lower()
         if not name.startswith(OMNICODE_CONTAINER_PREFIX):
             continue
-        if target and target not in name and not exclude_ids:
+        if target and target not in name:
             continue
         if state in removable_states or (include_running and state == "up"):
             selected.append(row["id"])
