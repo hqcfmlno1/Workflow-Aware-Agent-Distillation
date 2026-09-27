@@ -2,6 +2,8 @@
 
 Tài liệu này mô tả cách collector dùng OmniCode và SWE-agent để sinh, lưu và tổng hợp một teacher trajectory.
 
+Mỗi attempt có hard timeout mặc định `720 giây` (12 phút). Collector dành `60 giây` cuối cho việc terminate process tree, dọn container và ghi record. SWE-ReX được cấu hình startup timeout `300 giây`; giá trị này chỉ là giới hạn khởi động runtime, không phải tổng thời gian của task.
+
 ## 1. Luồng sinh một trajectory
 
 ```text
@@ -63,6 +65,15 @@ Collector gọi `baselines/sweagent/sweagent_regular.py` với:
 - teacher model;
 - API base và API key từ environment;
 - thư mục output của attempt.
+
+Trước khi chạy batch, có thể prebuild image để cài sẵn SWE-ReX:
+
+```powershell
+uv run python scripts/prebuild_swerex_images.py `
+  omnicodeorg/omnicode:elastic_logstash_base
+```
+
+Script tạo image hậu tố `-swerex`, cài `swe-rex==1.3.0`, chạy preflight `swerex-remote --version`, rồi mặc định retag image đó bằng tên OmniCode gốc để SWE-agent tự sử dụng image đã prebuild. Dùng `--no-retag` nếu chỉ muốn giữ tag hậu tố. Prebuild image chỉ cần thực hiện một lần cho mỗi image OmniCode; mỗi task vẫn tạo container mới để tránh state leak.
 
 SWE-agent dùng SWE-ReX để tạo runtime cho repository. Trong lúc agent hoạt động, mỗi vòng lặp gồm model response, tool/action, environment observation và quyết định tiếp theo của agent.
 
@@ -156,3 +167,15 @@ Một trajectory đầy đủ tối thiểu nên có:
 6. Log và metadata đủ để truy lại attempt khi có lỗi.
 
 Các record lỗi hạ tầng vẫn được lưu để phân tích và retry, nhưng không nên đưa vào tập imitation chính nếu không có trajectory hợp lệ.
+
+## 6. Timeout và cleanup
+
+Collector phân bổ deadline của một task như sau:
+
+```text
+0–300s    SWE-ReX startup/runtime
+0–660s    SWE-agent, teacher API và tool execution
+660–720s  terminate process tree, cleanup container và ghi record
+```
+
+Đây là deadline động: thời gian startup dùng ít hơn thì agent có thêm thời gian. Nếu process không còn progress hoặc vượt execution budget, collector terminate toàn bộ process tree thay vì chỉ dừng process cha. Container được tạo bởi attempt được force-remove trong phần cleanup; Docker image không bị xóa.

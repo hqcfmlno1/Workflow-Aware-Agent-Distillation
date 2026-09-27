@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -25,6 +26,10 @@ LANGUAGES = ("python", "java", "cpp")
 WORKFLOWS = ("bugfixing", "test_generation", "style_review", "review_response")
 COLLECTOR_VERSION = "0.1.0"
 OMNICODE_CONTAINER_PREFIX = "omnicodeorgomnicode"
+DEFAULT_TASK_TIMEOUT_SECONDS = 720.0
+CLEANUP_RESERVE_SECONDS = 60.0
+DEFAULT_SWE_REX_STARTUP_TIMEOUT_SECONDS = 300
+PROCESS_TERMINATION_TIMEOUT_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
@@ -205,6 +210,8 @@ def _command_for_task(
         model,
         "--use_apptainer",
         str(use_apptainer).lower(),
+        "--startup_timeout",
+        str(int(DEFAULT_SWE_REX_STARTUP_TIMEOUT_SECONDS)),
         "--output_file",
         str(output_dir / "all_preds.jsonl"),
     ]
@@ -225,6 +232,42 @@ def _build_subprocess_env(api_base: str, api_key: str) -> dict[str, str]:
     return env
 
 
+def _split_task_budget(
+    total_timeout_seconds: float,
+    cleanup_reserve_seconds: float = CLEANUP_RESERVE_SECONDS,
+) -> tuple[float, float]:
+    """Reserve time for cleanup while keeping at least one second for execution."""
+    total = max(1.0, float(total_timeout_seconds))
+    reserve = min(max(0.0, float(cleanup_reserve_seconds)), total - 1.0)
+    return total - reserve, reserve
+
+
+def _process_tree_termination_command(pid: int, *, platform: str | None = None) -> list[str]:
+    current_platform = platform or os.name
+    if current_platform == "nt" or current_platform.startswith("win"):
+        return ["taskkill", "/PID", str(pid), "/T", "/F"]
+    return ["kill", "-TERM", f"-{pid}"]
+
+
+def _terminate_process_tree(process: subprocess.Popen[Any]) -> None:
+    if process.poll() is not None:
+        return
+    command = _process_tree_termination_command(process.pid)
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(
+            command,
+            capture_output=True,
+            check=False,
+            timeout=PROCESS_TERMINATION_TIMEOUT_SECONDS,
+        )
+    try:
+        process.wait(timeout=PROCESS_TERMINATION_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=5)
+
+
 def _run_subprocess(
     command: list[str],
     *,
@@ -239,16 +282,24 @@ def _run_subprocess(
     with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
         "w", encoding="utf-8"
     ) as stderr:
-        process = subprocess.Popen(command, cwd=cwd, env=env, stdout=stdout, stderr=stderr)
+        popen_options: dict[str, Any] = {
+            "cwd": cwd,
+            "env": env,
+            "stdout": stdout,
+            "stderr": stderr,
+        }
+        if os.name == "nt":
+            popen_options["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            popen_options["start_new_session"] = True
+        process = subprocess.Popen(command, **popen_options)
         started = time.monotonic()
         while process.poll() is None:
             if immediate_stop.is_set():
-                process.terminate()
-                process.wait(timeout=30)
+                _terminate_process_tree(process)
                 return "interrupted", process.returncode
             if time.monotonic() - started >= timeout_seconds:
-                process.terminate()
-                process.wait(timeout=30)
+                _terminate_process_tree(process)
                 return "timeout", process.returncode
             time.sleep(0.5)
     return ("completed" if process.returncode == 0 else "infra_failed"), process.returncode
@@ -306,7 +357,7 @@ def _containers_to_remove(
         state = row.get("status", "").split(maxsplit=1)[0].lower()
         if not name.startswith(OMNICODE_CONTAINER_PREFIX):
             continue
-        if target and target not in name and not exclude_ids:
+        if target and target not in name:
             continue
         if state in removable_states or (include_running and state == "up"):
             selected.append(row["id"])
@@ -341,6 +392,7 @@ def cleanup_omnicode_containers(
     include_running: bool = False,
     dry_run: bool = False,
     exclude_ids: set[str] | None = None,
+    timeout_seconds: float | None = None,
 ) -> list[str]:
     """Remove finished OmniCode containers, optionally scoped to one task."""
     rows = _docker_container_rows()
@@ -349,12 +401,23 @@ def cleanup_omnicode_containers(
     )
     if dry_run:
         return selected
+    deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
     for container_id in selected:
         command = ["docker", "rm"]
         if include_running:
             command.append("-f")
         command.append(container_id)
-        subprocess.run(command, capture_output=True, text=True, check=False)
+        remaining = None if deadline is None else max(0.1, deadline - time.monotonic())
+        try:
+            subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=remaining,
+            )
+        except subprocess.TimeoutExpired:
+            break
     return selected
 
 
@@ -383,6 +446,9 @@ def _load_final_patch(run_dir: Path, task_id: str) -> str | None:
     if patch_path is not None:
         try:
             return patch_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            # Git/SWE-Agent may emit patches using the Windows code page.
+            return patch_path.read_text(encoding="cp1252")
         except OSError:
             pass
 
@@ -478,6 +544,7 @@ def run_one(
     api_key: str,
     use_apptainer: bool,
     timeout_seconds: float,
+    cleanup_reserve_seconds: float,
     stop_event: threading.Event,
     immediate_stop: threading.Event,
 ) -> dict[str, Any]:
@@ -487,6 +554,9 @@ def run_one(
     _reset_run_output(raw_dir)
     existing_container_ids = {row["id"] for row in _docker_container_rows()}
     started = time.monotonic()
+    execution_timeout, cleanup_budget = _split_task_budget(
+        timeout_seconds, cleanup_reserve_seconds
+    )
     command = _command_for_task(
         spec=planned.spec,
         instance_id=task_id,
@@ -503,15 +573,20 @@ def run_one(
         env=env,
         stdout_path=run_dir / "stdout.log",
         stderr_path=run_dir / "stderr.log",
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=execution_timeout,
         stop_event=stop_event,
         immediate_stop=immediate_stop,
     )
     status = _classify_run_result(status, returncode, run_dir / "stderr.log")
     cleanup_omnicode_containers(
-        task_id, include_running=True, exclude_ids=existing_container_ids
+        task_id,
+        include_running=True,
+        exclude_ids=existing_container_ids,
+        timeout_seconds=cleanup_budget,
     )
     duration = time.monotonic() - started
+    if duration > timeout_seconds and status in {"completed", "infra_failed"}:
+        status = "timeout"
     manifest_status = "completed_success" if status == "completed" else status
     record = _build_distillation_record(
         run_dir,
@@ -687,6 +762,7 @@ def collect(args: argparse.Namespace) -> int:
                         api_key=args.api_key,
                         use_apptainer=args.use_apptainer,
                         timeout_seconds=args.timeout_seconds,
+                        cleanup_reserve_seconds=args.cleanup_reserve_seconds,
                         stop_event=stop_event,
                         immediate_stop=immediate_stop,
                     )
@@ -708,6 +784,7 @@ def collect(args: argparse.Namespace) -> int:
                             api_key=args.api_key,
                             use_apptainer=args.use_apptainer,
                             timeout_seconds=args.timeout_seconds,
+                            cleanup_reserve_seconds=args.cleanup_reserve_seconds,
                             stop_event=stop_event,
                             immediate_stop=immediate_stop,
                         )
@@ -751,7 +828,13 @@ def make_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--timeout-seconds", type=float, default=7200)
+    parser.add_argument("--timeout-seconds", type=float, default=DEFAULT_TASK_TIMEOUT_SECONDS)
+    parser.add_argument(
+        "--cleanup-reserve-seconds",
+        type=float,
+        default=CLEANUP_RESERVE_SECONDS,
+        help="Budget reserved for process termination, container cleanup, and record writing.",
+    )
     parser.add_argument("--use-apptainer", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser
