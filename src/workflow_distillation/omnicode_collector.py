@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 from collections.abc import Iterable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,10 +27,16 @@ LANGUAGES = ("python", "java", "cpp")
 WORKFLOWS = ("bugfixing", "test_generation", "style_review", "review_response")
 COLLECTOR_VERSION = "0.1.0"
 OMNICODE_CONTAINER_PREFIX = "omnicodeorgomnicode"
-DEFAULT_TASK_TIMEOUT_SECONDS = 720.0
-CLEANUP_RESERVE_SECONDS = 60.0
+DEFAULT_RUNNER_TIMEOUT_SECONDS = 600.0
+DEFAULT_CLEANUP_TIMEOUT_SECONDS = 60.0
 DEFAULT_SWE_REX_STARTUP_TIMEOUT_SECONDS = 300
+DEFAULT_AGENT_TIMEOUT_SECONDS = 600
+DEFAULT_TOOL_TIMEOUT_SECONDS = 60
+DEFAULT_API_TIMEOUT_SECONDS = 120
+DEFAULT_MAX_COST_PER_TASK = 0.15
+DEFAULT_MAX_API_CALLS_PER_TASK = 30
 PROCESS_TERMINATION_TIMEOUT_SECONDS = 15.0
+SWE_REX_IMAGE_SUFFIX = "-swerex"
 
 
 @dataclass(frozen=True)
@@ -47,6 +54,71 @@ class PlannedTask:
     instance: dict[str, Any]
     attempt_id: int
     run_key: str
+
+
+def _omnicode_image_for_task(planned: PlannedTask) -> str:
+    instance = planned.instance
+    if planned.spec.language in {"java", "cpp"}:
+        image_tag = str(instance["repo"]).replace("/", "_") + "_base"
+    elif planned.spec.sweagent_mode == "stylereview-python":
+        image_tag = "_".join(str(instance["instance_id"]).rsplit("_")[:-1])
+    else:
+        image_tag = str(instance["instance_id"])
+    return f"omnicodeorg/omnicode:{image_tag}"
+
+
+def _group_plan_by_image(plan: list[PlannedTask]) -> list[tuple[str, list[PlannedTask]]]:
+    grouped: dict[str, list[PlannedTask]] = {}
+    for planned in plan:
+        grouped.setdefault(_omnicode_image_for_task(planned), []).append(planned)
+    return sorted(grouped.items(), key=lambda item: -len(item[1]))
+
+
+def _image_cleanup_command(image: str) -> list[str]:
+    return [
+        "docker",
+        "image",
+        "rm",
+        "--force",
+        image + SWE_REX_IMAGE_SUFFIX,
+        image,
+    ]
+
+
+def _prebuild_image_command(image: str, project_root: Path, python_executable: str) -> list[str]:
+    return [
+        python_executable,
+        str(project_root / "scripts" / "prebuild_swerex_images.py"),
+        image,
+    ]
+
+
+def _build_cache_prune_command() -> list[str]:
+    return ["docker", "builder", "prune", "--force"]
+
+
+def _prepare_image_group(image: str, *, project_root: Path, python_executable: str) -> None:
+    subprocess.run(
+        _prebuild_image_command(image, project_root, python_executable),
+        cwd=project_root,
+        check=True,
+    )
+
+
+def _cleanup_image_group(
+    image: str,
+    *,
+    project_root: Path,
+    delete_image: bool,
+    cleanup_timeout_seconds: float | None,
+) -> None:
+    cleanup_omnicode_containers(
+        image=image,
+        include_running=True,
+        timeout_seconds=cleanup_timeout_seconds,
+    )
+    if delete_image:
+        subprocess.run(_image_cleanup_command(image), cwd=project_root, check=False)
 
 
 def build_task_specs(
@@ -184,6 +256,12 @@ def _safe_name(value: str) -> str:
     return "".join(char if char.isalnum() or char in "._-" else "_" for char in value)
 
 
+def _run_directory(output_root: Path, planned: PlannedTask) -> Path:
+    task_id = _safe_name(str(planned.instance["instance_id"]))
+    workflow = _safe_name(planned.spec.workflow)
+    return output_root / "runs" / task_id / workflow / f"attempt_{planned.attempt_id:03d}"
+
+
 def _command_for_task(
     *,
     spec: TaskSpec,
@@ -193,9 +271,15 @@ def _command_for_task(
     model: str,
     python_executable: str,
     use_apptainer: bool,
+    startup_timeout_seconds: float = DEFAULT_SWE_REX_STARTUP_TIMEOUT_SECONDS,
+    agent_timeout_seconds: float = DEFAULT_AGENT_TIMEOUT_SECONDS,
+    tool_timeout_seconds: float = DEFAULT_TOOL_TIMEOUT_SECONDS,
+    api_timeout_seconds: float | None = DEFAULT_API_TIMEOUT_SECONDS,
+    max_cost_per_task: float = DEFAULT_MAX_COST_PER_TASK,
+    max_api_calls_per_task: int = DEFAULT_MAX_API_CALLS_PER_TASK,
 ) -> list[str]:
     runner = omnicode_root / "baselines" / "sweagent" / "sweagent_regular.py"
-    return [
+    command = [
         python_executable,
         str(runner),
         "--input_tasks",
@@ -211,10 +295,21 @@ def _command_for_task(
         "--use_apptainer",
         str(use_apptainer).lower(),
         "--startup_timeout",
-        str(int(DEFAULT_SWE_REX_STARTUP_TIMEOUT_SECONDS)),
+        str(int(startup_timeout_seconds)),
+        "--agent_timeout",
+        str(int(agent_timeout_seconds)),
+        "--tool_timeout",
+        str(int(tool_timeout_seconds)),
+        "--max_cost_per_task",
+        str(max_cost_per_task),
+        "--max_api_calls_per_task",
+        str(max_api_calls_per_task),
         "--output_file",
         str(output_dir / "all_preds.jsonl"),
     ]
+    if api_timeout_seconds is not None:
+        command.extend(["--api_timeout", str(int(api_timeout_seconds))])
+    return command
 
 
 def _build_subprocess_env(api_base: str, api_key: str) -> dict[str, str]:
@@ -230,16 +325,6 @@ def _build_subprocess_env(api_base: str, api_key: str) -> dict[str, str]:
         }
     )
     return env
-
-
-def _split_task_budget(
-    total_timeout_seconds: float,
-    cleanup_reserve_seconds: float = CLEANUP_RESERVE_SECONDS,
-) -> tuple[float, float]:
-    """Reserve time for cleanup while keeping at least one second for execution."""
-    total = max(1.0, float(total_timeout_seconds))
-    reserve = min(max(0.0, float(cleanup_reserve_seconds)), total - 1.0)
-    return total - reserve, reserve
 
 
 def _process_tree_termination_command(pid: int, *, platform: str | None = None) -> list[str]:
@@ -306,9 +391,16 @@ def _run_subprocess(
 
 
 def _classify_run_result(status: str, returncode: int | None, stderr_path: Path) -> str:
+    stderr = stderr_path.read_text(encoding="utf-8", errors="replace")
+    budget_markers = (
+        "Instance cost limit exceeded",
+        "Per instance call limit exceeded",
+        "exceeds limit",
+    )
+    if any(marker in stderr for marker in budget_markers):
+        return "budget_exhausted"
     if status != "completed" or returncode != 0:
         return status
-    stderr = stderr_path.read_text(encoding="utf-8", errors="replace")
     infrastructure_markers = (
         "litellm.",
         "AuthenticationError",
@@ -330,7 +422,7 @@ def _completed_run_keys(rows: list[dict[str, Any]]) -> set[str]:
     return {
         run_key
         for run_key, status in latest_status.items()
-        if status.startswith("completed_") or status == "completed"
+        if status.startswith("completed_") or status in {"completed", "budget_exhausted"}
     }
 
 
@@ -343,6 +435,7 @@ def _containers_to_remove(
     rows: list[dict[str, str]],
     task_id: str | None,
     *,
+    image: str | None = None,
     include_running: bool,
     exclude_ids: set[str] | None = None,
 ) -> list[str]:
@@ -359,6 +452,8 @@ def _containers_to_remove(
             continue
         if target and target not in name:
             continue
+        if image and row.get("image") != image:
+            continue
         if state in removable_states or (include_running and state == "up"):
             selected.append(row["id"])
     return selected
@@ -367,7 +462,13 @@ def _containers_to_remove(
 def _docker_container_rows() -> list[dict[str, str]]:
     try:
         result = subprocess.run(
-            ["docker", "ps", "-a", "--format", "{{.ID}}\t{{.Status}}\t{{.Names}}"],
+            [
+                "docker",
+                "ps",
+                "-a",
+                "--format",
+                "{{.ID}}\t{{.Status}}\t{{.Names}}\t{{.Image}}",
+            ],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -380,24 +481,30 @@ def _docker_container_rows() -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for line in result.stdout.splitlines():
         container_id, separator, remainder = line.partition("\t")
-        status, separator, name = remainder.partition("\t")
+        status, separator, remainder = remainder.partition("\t")
+        name, separator, image = remainder.partition("\t")
         if separator and name:
-            rows.append({"id": container_id, "status": status, "name": name})
+            rows.append({"id": container_id, "status": status, "name": name, "image": image})
     return rows
 
 
 def cleanup_omnicode_containers(
     task_id: str | None = None,
     *,
+    image: str | None = None,
     include_running: bool = False,
     dry_run: bool = False,
     exclude_ids: set[str] | None = None,
     timeout_seconds: float | None = None,
 ) -> list[str]:
-    """Remove finished OmniCode containers, optionally scoped to one task."""
+    """Remove OmniCode containers, optionally scoped to one task or exact image."""
     rows = _docker_container_rows()
     selected = _containers_to_remove(
-        rows, task_id, include_running=include_running, exclude_ids=exclude_ids
+        rows,
+        task_id,
+        image=image,
+        include_running=include_running,
+        exclude_ids=exclude_ids,
     )
     if dry_run:
         return selected
@@ -543,20 +650,24 @@ def run_one(
     api_base: str,
     api_key: str,
     use_apptainer: bool,
-    timeout_seconds: float,
-    cleanup_reserve_seconds: float,
+    runner_timeout_seconds: float,
+    cleanup_timeout_seconds: float,
+    startup_timeout_seconds: float,
+    agent_timeout_seconds: float,
+    tool_timeout_seconds: float,
+    api_timeout_seconds: float | None,
+    max_cost_per_task: float,
+    max_api_calls_per_task: int,
+    cleanup_after_run: bool,
     stop_event: threading.Event,
     immediate_stop: threading.Event,
 ) -> dict[str, Any]:
     task_id = str(planned.instance["instance_id"])
-    run_dir = output_root / "runs" / _safe_name(task_id) / f"attempt_{planned.attempt_id:03d}"
+    run_dir = _run_directory(output_root, planned)
     raw_dir = run_dir / "sweagent_output"
     _reset_run_output(raw_dir)
     existing_container_ids = {row["id"] for row in _docker_container_rows()}
     started = time.monotonic()
-    execution_timeout, cleanup_budget = _split_task_budget(
-        timeout_seconds, cleanup_reserve_seconds
-    )
     command = _command_for_task(
         spec=planned.spec,
         instance_id=task_id,
@@ -565,6 +676,12 @@ def run_one(
         model=model,
         python_executable=python_executable,
         use_apptainer=use_apptainer,
+        startup_timeout_seconds=startup_timeout_seconds,
+        agent_timeout_seconds=agent_timeout_seconds,
+        tool_timeout_seconds=tool_timeout_seconds,
+        api_timeout_seconds=api_timeout_seconds,
+        max_cost_per_task=max_cost_per_task,
+        max_api_calls_per_task=max_api_calls_per_task,
     )
     env = _build_subprocess_env(api_base, api_key)
     status, returncode = _run_subprocess(
@@ -573,20 +690,19 @@ def run_one(
         env=env,
         stdout_path=run_dir / "stdout.log",
         stderr_path=run_dir / "stderr.log",
-        timeout_seconds=execution_timeout,
+        timeout_seconds=runner_timeout_seconds,
         stop_event=stop_event,
         immediate_stop=immediate_stop,
     )
     status = _classify_run_result(status, returncode, run_dir / "stderr.log")
-    cleanup_omnicode_containers(
-        task_id,
-        include_running=True,
-        exclude_ids=existing_container_ids,
-        timeout_seconds=cleanup_budget,
-    )
+    if cleanup_after_run:
+        cleanup_omnicode_containers(
+            task_id,
+            include_running=True,
+            exclude_ids=existing_container_ids,
+            timeout_seconds=cleanup_timeout_seconds,
+        )
     duration = time.monotonic() - started
-    if duration > timeout_seconds and status in {"completed", "infra_failed"}:
-        status = "timeout"
     manifest_status = "completed_success" if status == "completed" else status
     record = _build_distillation_record(
         run_dir,
@@ -612,6 +728,14 @@ def run_one(
         "collector_version": COLLECTOR_VERSION,
         "started_at": datetime.now(UTC).isoformat(),
         "runtime_seconds": duration,
+        "runner_timeout_seconds": runner_timeout_seconds,
+        "cleanup_timeout_seconds": cleanup_timeout_seconds,
+        "startup_timeout_seconds": startup_timeout_seconds,
+        "agent_timeout_seconds": agent_timeout_seconds,
+        "tool_timeout_seconds": tool_timeout_seconds,
+        "api_timeout_seconds": api_timeout_seconds,
+        "max_cost_per_task": max_cost_per_task,
+        "max_api_calls_per_task": max_api_calls_per_task,
         "status": manifest_status,
         "outcome": "agent_completed" if status == "completed" else status,
         "returncode": returncode,
@@ -621,6 +745,48 @@ def run_one(
     }
     (run_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return metadata
+
+
+def _run_planned_tasks(
+    tasks: list[PlannedTask],
+    *,
+    workers: int,
+    execute_one: Any,
+    persist_result: Any,
+    stop_event: threading.Event,
+    immediate_stop: threading.Event,
+) -> int:
+    if workers < 1:
+        raise ValueError("workers must be at least 1")
+
+    pending = iter(tasks)
+    active: set[Future[Any]] = set()
+    finished = 0
+
+    def submit_next(executor: ThreadPoolExecutor) -> bool:
+        if stop_event.is_set() or immediate_stop.is_set():
+            return False
+        try:
+            item = next(pending)
+        except StopIteration:
+            return False
+        active.add(executor.submit(execute_one, item))
+        return True
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for _ in range(workers):
+            if not submit_next(executor):
+                break
+
+        while active:
+            completed, active = wait(active, return_when=FIRST_COMPLETED)
+            for future in completed:
+                persist_result(future.result())
+                finished += 1
+            while len(active) < workers and submit_next(executor):
+                pass
+
+    return finished
 
 
 def _build_plan(
@@ -716,11 +882,17 @@ def collect(args: argparse.Namespace) -> int:
     print(f"experiment_id={experiment_id}")
     print(f"planned_runs={len(plan)}")
     if args.dry_run:
-        for planned in plan:
-            print(
-                f"{planned.spec.language}/{planned.spec.workflow}/"
-                f"{planned.instance['instance_id']}/attempt_{planned.attempt_id}"
-            )
+        groups = _group_plan_by_image(plan) if args.group_by_image else [("", plan)]
+        if args.group_by_image:
+            print(f"image_groups={len(groups)}")
+        for image, planned_tasks in groups:
+            if image:
+                print(f"image_group={image} runs={len(planned_tasks)}")
+            for planned in planned_tasks:
+                print(
+                    f"{planned.spec.language}/{planned.spec.workflow}/"
+                    f"{planned.instance['instance_id']}/attempt_{planned.attempt_id}"
+                )
         return 0
     if not args.api_key:
         raise RuntimeError("OPENAI_API_KEY is required unless --dry-run is used")
@@ -744,64 +916,95 @@ def collect(args: argparse.Namespace) -> int:
     records_path = output_root / "records.jsonl"
     manifest_lock = threading.Lock()
     records_lock = threading.Lock()
+
+    def persist_result(result: dict[str, Any]) -> None:
+        record_path = Path(result["record_path"])
+        if record_path.exists():
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            _append_jsonl(records_path, record, records_lock)
+        _append_jsonl(manifest_path, result, manifest_lock)
+
+    def execute_one(item: PlannedTask) -> dict[str, Any]:
+        return run_one(
+            item,
+            omnicode_root=omnicode_root,
+            output_root=output_root,
+            model=args.model,
+            python_executable=args.omnicode_python,
+            api_base=args.api_base,
+            api_key=args.api_key,
+            use_apptainer=args.use_apptainer,
+            runner_timeout_seconds=args.runner_timeout_seconds,
+            cleanup_timeout_seconds=args.cleanup_timeout_seconds,
+            startup_timeout_seconds=args.startup_timeout_seconds,
+            agent_timeout_seconds=args.agent_timeout_seconds,
+            tool_timeout_seconds=args.tool_timeout_seconds,
+            api_timeout_seconds=args.api_timeout_seconds,
+            max_cost_per_task=args.max_cost_per_task,
+            max_api_calls_per_task=args.max_api_calls_per_task,
+            cleanup_after_run=not args.group_by_image,
+            stop_event=stop_event,
+            immediate_stop=immediate_stop,
+        )
+
     try:
-        index = 0
-        while index < len(plan) and not immediate_stop.is_set():
-            batch = plan[index : index + max(1, args.workers)]
-            if stop_event.is_set():
-                break
-            if args.workers == 1:
-                results = [
-                    run_one(
-                        item,
-                        omnicode_root=omnicode_root,
-                        output_root=output_root,
-                        model=args.model,
-                        python_executable=args.omnicode_python,
-                        api_base=args.api_base,
-                        api_key=args.api_key,
-                        use_apptainer=args.use_apptainer,
-                        timeout_seconds=args.timeout_seconds,
-                        cleanup_reserve_seconds=args.cleanup_reserve_seconds,
+        if args.group_by_image:
+            project_root = Path(__file__).resolve().parents[2]
+            groups = _group_plan_by_image(plan)
+            finished = 0
+            for group_index, (image, planned_tasks) in enumerate(groups, start=1):
+                if stop_event.is_set() or immediate_stop.is_set():
+                    break
+                print(
+                    f"image_group_start={group_index}/{len(groups)} "
+                    f"image={image} runs={len(planned_tasks)}"
+                )
+                try:
+                    if args.prebuild_images:
+                        _prepare_image_group(
+                            image,
+                            project_root=project_root,
+                            python_executable=sys.executable,
+                        )
+                    finished += _run_planned_tasks(
+                        planned_tasks,
+                        workers=args.workers,
+                        execute_one=execute_one,
+                        persist_result=persist_result,
                         stop_event=stop_event,
                         immediate_stop=immediate_stop,
                     )
-                    for item in batch
-                ]
-            else:
-                from concurrent.futures import ThreadPoolExecutor
+                except subprocess.CalledProcessError as exc:
+                    print(
+                        f"image_group_prebuild_failed image={image} returncode={exc.returncode}",
+                        file=sys.stderr,
+                    )
+                finally:
+                    _cleanup_image_group(
+                        image,
+                        project_root=project_root,
+                        delete_image=args.delete_image_after_group,
+                        cleanup_timeout_seconds=args.cleanup_timeout_seconds,
+                    )
+                print(f"image_group_finished={group_index}/{len(groups)} image={image}")
+            if args.prune_build_cache_after_group:
+                subprocess.run(_build_cache_prune_command(), cwd=project_root, check=False)
+            print(f"finished_runs={finished}")
+            print(f"remaining_runs={max(0, len(plan) - finished)}")
+            return 0
 
-                with ThreadPoolExecutor(max_workers=args.workers) as executor:
-                    futures = [
-                        executor.submit(
-                            run_one,
-                            item,
-                            omnicode_root=omnicode_root,
-                            output_root=output_root,
-                            model=args.model,
-                            python_executable=args.omnicode_python,
-                            api_base=args.api_base,
-                            api_key=args.api_key,
-                            use_apptainer=args.use_apptainer,
-                            timeout_seconds=args.timeout_seconds,
-                            cleanup_reserve_seconds=args.cleanup_reserve_seconds,
-                            stop_event=stop_event,
-                            immediate_stop=immediate_stop,
-                        )
-                        for item in batch
-                    ]
-                    results = [future.result() for future in futures]
-            for result in results:
-                record_path = Path(result["record_path"])
-                if record_path.exists():
-                    record = json.loads(record_path.read_text(encoding="utf-8"))
-                    _append_jsonl(records_path, record, records_lock)
-                _append_jsonl(manifest_path, result, manifest_lock)
-            index += len(batch)
+        finished = _run_planned_tasks(
+            plan,
+            workers=args.workers,
+            execute_one=execute_one,
+            persist_result=persist_result,
+            stop_event=stop_event,
+            immediate_stop=immediate_stop,
+        )
     finally:
         signal.signal(signal.SIGINT, previous_handler)
-    print(f"finished_runs={index}")
-    print(f"remaining_runs={max(0, len(plan) - index)}")
+    print(f"finished_runs={finished}")
+    print(f"remaining_runs={max(0, len(plan) - finished)}")
     return 0
 
 
@@ -828,14 +1031,79 @@ def make_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--timeout-seconds", type=float, default=DEFAULT_TASK_TIMEOUT_SECONDS)
     parser.add_argument(
-        "--cleanup-reserve-seconds",
+        "--runner-timeout-seconds",
+        "--timeout-seconds",
+        dest="runner_timeout_seconds",
         type=float,
-        default=CLEANUP_RESERVE_SECONDS,
-        help="Budget reserved for process termination, container cleanup, and record writing.",
+        default=DEFAULT_RUNNER_TIMEOUT_SECONDS,
+        help="Hard timeout for the SWE-Agent runner process; cleanup has a separate budget.",
+    )
+    parser.add_argument(
+        "--cleanup-timeout-seconds",
+        "--cleanup-reserve-seconds",
+        dest="cleanup_timeout_seconds",
+        type=float,
+        default=DEFAULT_CLEANUP_TIMEOUT_SECONDS,
+        help="Independent budget for terminating processes and cleaning containers.",
+    )
+    parser.add_argument(
+        "--startup-timeout-seconds",
+        type=float,
+        default=DEFAULT_SWE_REX_STARTUP_TIMEOUT_SECONDS,
+        help="SWE-ReX runtime startup timeout passed to SWE-Agent.",
+    )
+    parser.add_argument(
+        "--agent-timeout-seconds",
+        type=float,
+        default=DEFAULT_AGENT_TIMEOUT_SECONDS,
+        help="SWE-Agent total tool-execution timeout inside the runtime.",
+    )
+    parser.add_argument(
+        "--tool-timeout-seconds",
+        type=float,
+        default=DEFAULT_TOOL_TIMEOUT_SECONDS,
+        help="Timeout for one bash/editor action inside SWE-Agent.",
+    )
+    parser.add_argument(
+        "--api-timeout-seconds",
+        type=float,
+        default=DEFAULT_API_TIMEOUT_SECONDS,
+        help="Timeout for one teacher API request; retries remain controlled by SWE-Agent.",
+    )
+    parser.add_argument(
+        "--max-cost-per-task",
+        type=float,
+        default=DEFAULT_MAX_COST_PER_TASK,
+        help="Stop one SWE-Agent run after this estimated model cost.",
+    )
+    parser.add_argument(
+        "--max-api-calls-per-task",
+        type=int,
+        default=DEFAULT_MAX_API_CALLS_PER_TASK,
+        help="Stop one SWE-Agent run after this many teacher API calls.",
     )
     parser.add_argument("--use-apptainer", action="store_true")
+    parser.add_argument(
+        "--group-by-image",
+        action="store_true",
+        help="Run tasks sharing an OmniCode image consecutively, largest groups first.",
+    )
+    parser.add_argument(
+        "--prebuild-images",
+        action="store_true",
+        help="Preinstall SWE-ReX into each image before running its task group.",
+    )
+    parser.add_argument(
+        "--delete-image-after-group",
+        action="store_true",
+        help="Delete the OmniCode base and prebuilt image tags after each group.",
+    )
+    parser.add_argument(
+        "--prune-build-cache-after-group",
+        action="store_true",
+        help="Prune unused Docker build cache once after all image groups finish.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
