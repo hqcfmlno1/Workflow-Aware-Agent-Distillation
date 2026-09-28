@@ -37,6 +37,36 @@ DEFAULT_MAX_COST_PER_TASK = 0.15
 DEFAULT_MAX_API_CALLS_PER_TASK = 30
 PROCESS_TERMINATION_TIMEOUT_SECONDS = 15.0
 SWE_REX_IMAGE_SUFFIX = "-swerex"
+LEGACY_BASH_DOCSTRING = 'docstring="runs the given command directly in bash"'
+PERSISTENT_BASH_DOCSTRING = """Runs the given command in a persistent Bash session.
+
+The same shell is reused across tool calls. Its working directory,
+environment variables, shell options, aliases, and traps persist.
+
+Do not run these at the top level:
+- exit, logout, exec, kill $$
+- set -e, set -u, set -o errexit, set -o nounset
+
+They can terminate or alter the persistent REX shell and prevent later
+tool calls from running.
+
+Avoid broad process-killing commands such as pkill or killall. Inspect
+running processes first and terminate only the intended task process.
+
+Avoid sourcing scripts into the persistent shell when they may modify
+shell options, traps, aliases, or other persistent state.
+
+For strict or isolated shell execution, use a subshell:
+
+( set -euo pipefail; command_1; command_2 )
+
+For commands expected to fail, handle their exit status explicitly, e.g.:
+
+if compiler_command; then
+  echo "unexpected success"
+else
+  echo "expected failure"
+fi"""
 
 
 @dataclass(frozen=True)
@@ -54,6 +84,25 @@ class PlannedTask:
     instance: dict[str, Any]
     attempt_id: int
     run_key: str
+
+
+def _ensure_persistent_bash_docstring(omnicode_root: Path) -> bool:
+    """Teach the bundled SWE-Agent that its Bash tool reuses one REX shell."""
+    commands_path = omnicode_root / "SWE-agent" / "sweagent" / "tools" / "commands.py"
+    source = commands_path.read_text(encoding="utf-8")
+    replacement = f"docstring={PERSISTENT_BASH_DOCSTRING!r}"
+    if replacement in source:
+        return False
+    if LEGACY_BASH_DOCSTRING not in source:
+        raise RuntimeError(
+            "Could not locate SWE-Agent's builtin Bash docstring; "
+            f"review the installed version at {commands_path}"
+        )
+    commands_path.write_text(
+        source.replace(LEGACY_BASH_DOCSTRING, replacement, 1),
+        encoding="utf-8",
+    )
+    return True
 
 
 def _omnicode_image_for_task(planned: PlannedTask) -> str:
@@ -899,6 +948,8 @@ def collect(args: argparse.Namespace) -> int:
     runner = omnicode_root / "baselines" / "sweagent" / "sweagent_regular.py"
     if not runner.exists():
         raise FileNotFoundError(f"OmniCode SWE-agent runner not found: {runner}")
+    if _ensure_persistent_bash_docstring(omnicode_root):
+        print("Updated SWE-Agent Bash tool documentation for persistent REX sessions.")
 
     stop_event = threading.Event()
     immediate_stop = threading.Event()
