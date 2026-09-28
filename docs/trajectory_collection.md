@@ -93,6 +93,8 @@ Nhấn `Ctrl+C` một lần để ngừng nhận task mới và chờ task đang
 
 SWE-agent dùng SWE-ReX để tạo runtime cho repository. Trong lúc agent hoạt động, mỗi vòng lặp gồm model response, tool/action, environment observation và quyết định tiếp theo của agent.
 
+Trước khi chạy task thật, collector cập nhật docstring của builtin `bash` tool để nói rõ rằng SWE-ReX tái sử dụng một persistent Bash session. Docstring yêu cầu agent không chạy `exit`, `exec`, `kill $$`, `set -e` hoặc `set -u` ở top level; khi cần strict shell mode, agent nên cô lập lệnh trong subshell `( ... )`. Thay đổi được áp dụng idempotently vào checkout SWE-Agent cục bộ nên vẫn có hiệu lực sau khi clone lại OmniCode trên máy khác.
+
 ### Bước 4: Lưu artifact
 
 Sau khi SWE-agent kết thúc, collector tìm các artifact chính:
