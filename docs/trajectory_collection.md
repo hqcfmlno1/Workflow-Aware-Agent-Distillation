@@ -2,7 +2,7 @@
 
 Tài liệu này mô tả cách collector dùng OmniCode và SWE-agent để sinh, lưu và tổng hợp một teacher trajectory.
 
-Mỗi attempt có runner timeout mặc định `600 giây` cho SWE-Agent và cleanup timeout độc lập `60 giây`. Tổng wall-clock tối đa vì vậy xấp xỉ `660 giây`. SWE-ReX được cấu hình startup timeout `300 giây`, SWE-Agent có agent tool timeout `600 giây`, mỗi action mặc định `60 giây`, và mỗi teacher API request mặc định `120 giây`. Collector còn dừng task khi chi phí vượt `$0.15` hoặc số teacher API call vượt `30`. Các budget này độc lập với nhau.
+Mỗi attempt có runner timeout mặc định `600 giây` cho SWE-Agent và cleanup timeout độc lập `60 giây`. Tổng wall-clock tối đa vì vậy xấp xỉ `660 giây`. SWE-ReX được cấu hình startup timeout `300 giây`, SWE-Agent có agent tool timeout `600 giây`, mỗi action mặc định `180 giây`, và mỗi teacher API request mặc định `120 giây`. Mặc định collector không đặt cost/API-call cap (`0` nghĩa là tắt giới hạn); chỉ các hard timeout theo thời gian dừng task. Có thể bật lại cap bằng `--max-cost-per-task` hoặc `--max-api-calls-per-task`.
 
 ## 1. Luồng sinh một trajectory
 
@@ -45,6 +45,10 @@ Tạo record.json rồi append vào records.jsonl và manifest.jsonl
 Collector đọc các dataset OmniCode theo `workflow` và `language`, sau đó chọn số lượng task được yêu cầu cho từng nhóm. `seed` giúp việc sampling có thể reproduce. `selection_manifest.jsonl` lưu các task đã được chọn; `manifest.jsonl` và trạng thái cũ được dùng để tránh chạy lại các run đã hoàn tất.
 
 Có thể truyền `task_id` cụ thể hoặc loại trừ task bằng `--skip-task-ids`.
+
+Để quét toàn bộ task chưa từng xuất hiện, dùng `--all-unseen`. Chế độ này coi một task là đã xuất hiện nếu khóa `(workflow, language, task_id)` có trong `selection_manifest.jsonl` hoặc `manifest.jsonl`, bất kể run trước đó thành công, lỗi hạ tầng hay bị gián đoạn. Chế độ mặc định `--target-per-group` không thay đổi.
+
+Để tiếp tục các task đã được reserve nhưng chưa có record trong `manifest.jsonl`, dùng `--unrecorded`. Chế độ này chỉ lấy các khóa có trong `selection_manifest.jsonl` nhưng chưa có trong `manifest.jsonl`, nên không chạy lại task đã có attempt.
 
 ### Bước 2: Tạo attempt độc lập
 
@@ -152,6 +156,7 @@ Mỗi dòng trong `records.jsonl` là một JSON object gồm các trường sau
 | `task_id` | `string` | ID duy nhất của task trong dataset OmniCode. |
 | `language` | `string` | Ngôn ngữ của repository/task, hiện gồm `python`, `java` hoặc `cpp`. |
 | `workflow` | `string` | Loại workflow được chạy, ví dụ `bugfixing`, `test_generation`, `style_review` hoặc `review_response`. |
+| `model` | `string` | Tên teacher model được collector dùng cho attempt này, cùng giá trị với `teacher_model` trong manifest/metadata. |
 | `status` | `string` | Kết quả thực thi của collector/harness, chẳng hạn `completed_success`, `completed_failure`, `budget_exhausted`, `infra_failed`, `interrupted` hoặc `timeout`. |
 | `success` | `boolean` hoặc `null` | Kết quả thành công; ưu tiên lấy từ verifier, nếu chưa có verifier thì dùng tín hiệu submit/harness và có thể là `null` khi lỗi hạ tầng. |
 | `verifier_score` | `number` hoặc `null` | Điểm raw do OmniCode verifier trả về; để `null` nếu verifier chưa chạy hoặc không có điểm số. |
@@ -170,9 +175,9 @@ Mỗi dòng trong `records.jsonl` là một JSON object gồm các trường sau
 - `status`: collector có hoàn tất được attempt hay gặp lỗi trong quá trình chạy?
 - `success`: agent có giải quyết task theo tiêu chí thành công hay không?
 
-Một run có thể có `status = completed_success` nhưng `success = false` nếu agent hoàn tất workflow nhưng patch không đạt yêu cầu. `budget_exhausted` nghĩa là model đã dùng hết cost/API-call budget; đây không phải lỗi Docker và collector sẽ không tự chạy lại cùng run. Ngược lại, `infra_failed`, `timeout` và `interrupted` thường có `success = null` vì chưa có đủ evidence để đánh giá model.
+`completed_success` chỉ được gán khi SWE-Agent chủ động kết thúc với `exit_status = submitted` và collector đọc được final patch không rỗng. Process thoát code `0` nhưng không submit, không có patch, hoặc kết thúc do lỗi format/blocklist được ghi là `completed_failure`. `budget_exhausted` nghĩa là model đã dùng hết cost/API-call budget; đây không phải lỗi Docker và collector sẽ không tự chạy lại cùng run. Ngược lại, `infra_failed`, `timeout` và `interrupted` thường có `success = null` vì chưa có đủ evidence để đánh giá model.
 
-Khi `verifier.json` tồn tại, `success` và `verifier_score` nên được xem là nguồn đánh giá chính. Nếu verifier chưa chạy, `completed_success` chỉ có nghĩa là SWE-agent/harness đã kết thúc, không khẳng định benchmark đã pass.
+Khi `verifier.json` tồn tại, `success` và `verifier_score` nên được xem là nguồn đánh giá chính. Nếu verifier chưa chạy, `completed_success` chỉ có nghĩa là SWE-Agent đã submit một patch hợp lệ về mặt hình thức; nó chưa khẳng định benchmark đã pass.
 
 ## 5. Điều kiện để một trajectory dùng được
 
@@ -194,12 +199,12 @@ Collector áp dụng các timeout độc lập cho một task như sau:
 ```text
 0–300s    SWE-ReX startup limit
 0–600s    SWE-Agent tool-execution limit
-0–60s     mỗi action/tool call
+0–180s    mỗi action/tool call
 0–120s    mỗi teacher API request
 0–600s    runner process hard limit
 0–60s     terminate process tree, cleanup container và ghi record
 ```
 
-Ngoài timeout, mỗi task mặc định có tối đa `$0.15` chi phí model và `30` teacher API call. Nếu runner vượt hard limit, collector terminate toàn bộ process tree. Nếu một action, API request, cost limit, call limit hoặc agent tool budget chạm giới hạn riêng, SWE-Agent xử lý lỗi và thoát trước runner timeout.
+Ngoài timeout, mặc định task không bị giới hạn chi phí model hoặc số teacher API call (`0` = không giới hạn). Nếu runner vượt hard limit, collector terminate toàn bộ process tree. Nếu một action, API request hoặc agent tool budget chạm giới hạn riêng, SWE-Agent xử lý lỗi và thoát trước runner timeout. Cost/call cap chỉ được áp dụng khi truyền giá trị dương qua CLI.
 
 Ở chế độ thường, collector dọn container sau từng attempt. Ở chế độ group-by-image, cleanup được hoãn tới khi toàn bộ task dùng image đó kết thúc để không xóa nhầm container của worker khác. Image chỉ bị xóa khi bật `--delete-image-after-group`; build cache chỉ được prune một lần sau toàn bộ batch.

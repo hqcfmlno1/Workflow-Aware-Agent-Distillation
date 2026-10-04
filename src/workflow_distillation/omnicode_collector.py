@@ -31,10 +31,11 @@ DEFAULT_RUNNER_TIMEOUT_SECONDS = 600.0
 DEFAULT_CLEANUP_TIMEOUT_SECONDS = 60.0
 DEFAULT_SWE_REX_STARTUP_TIMEOUT_SECONDS = 300
 DEFAULT_AGENT_TIMEOUT_SECONDS = 600
-DEFAULT_TOOL_TIMEOUT_SECONDS = 60
+DEFAULT_TOOL_TIMEOUT_SECONDS = 180
 DEFAULT_API_TIMEOUT_SECONDS = 120
-DEFAULT_MAX_COST_PER_TASK = 0.15
-DEFAULT_MAX_API_CALLS_PER_TASK = 30
+# Zero disables cost/call caps; wall-clock and tool timeouts remain enforced.
+DEFAULT_MAX_COST_PER_TASK = 0.0
+DEFAULT_MAX_API_CALLS_PER_TASK = 0
 PROCESS_TERMINATION_TIMEOUT_SECONDS = 15.0
 SWE_REX_IMAGE_SUFFIX = "-swerex"
 LEGACY_BASH_DOCSTRING = 'docstring="runs the given command directly in bash"'
@@ -67,6 +68,107 @@ if compiler_command; then
 else
   echo "expected failure"
 fi"""
+PERSISTENT_SHELL_GUARD_MARKER = "def _has_persistent_shell_violation"
+PERSISTENT_SHELL_GUARD_SOURCE = r'''
+_HEREDOC_START_RE = re.compile(
+    r"<<-?\s*(?P<quote>['\"]?)(?P<name>[A-Za-z_][A-Za-z0-9_]*)\1"
+)
+_PERSISTENT_SHELL_COMMAND_RE = re.compile(
+    r"(?m)(?:^|&&|\|\||[;&|]|\bthen\b|\bdo\b)\s*"
+    r"(?:builtin\s+|command\s+)?"
+    r"(?:"
+    r"exit(?:\s|$)|logout(?:\s|$)|exec(?:\s|$)|"
+    r"pkill(?:\s|$)|killall(?:\s|$)|"
+    r"kill\s+(?:-[A-Za-z0-9]+\s+)*\$\$(?:\s|$)|"
+    r"set\s+(?:-[A-Za-z]*[eu][A-Za-z]*\b|-o\s+(?:errexit|nounset)\b)"
+    r")"
+)
+
+
+def _without_heredoc_bodies(action: str) -> str:
+    executable_lines = []
+    pending_delimiters = []
+    for line in action.splitlines():
+        if pending_delimiters:
+            if line.strip() == pending_delimiters[0]:
+                pending_delimiters.pop(0)
+            continue
+        executable_lines.append(line)
+        pending_delimiters.extend(
+            match.group("name") for match in _HEREDOC_START_RE.finditer(line)
+        )
+    return "\n".join(executable_lines)
+
+
+def _top_level_shell_text(action: str) -> str:
+    text = _without_heredoc_bodies(action)
+    masked = []
+    quote = None
+    escaped = False
+    comment = False
+    subshell_depth = 0
+    previous = "\n"
+    for char in text:
+        if char == "\n":
+            masked.append(char)
+            comment = False
+            escaped = False
+            previous = char
+            continue
+        if comment:
+            masked.append(" ")
+            previous = char
+            continue
+        if escaped:
+            masked.append(" ")
+            escaped = False
+            previous = char
+            continue
+        if quote is not None:
+            masked.append(" ")
+            if quote == '"' and char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            previous = char
+            continue
+        if char == "\\":
+            masked.append(" ")
+            escaped = True
+        elif char in {"'", '"'}:
+            masked.append(" ")
+            quote = char
+        elif char == "#" and previous.isspace():
+            masked.append(" ")
+            comment = True
+        elif char == "(":
+            masked.append(" ")
+            subshell_depth += 1
+        elif char == ")" and subshell_depth:
+            masked.append(" ")
+            subshell_depth -= 1
+        else:
+            masked.append(char if subshell_depth == 0 else " ")
+        previous = char
+    return "".join(masked)
+
+
+def _has_persistent_shell_violation(action: str) -> bool:
+    return bool(_PERSISTENT_SHELL_COMMAND_RE.search(_top_level_shell_text(action)))
+'''.strip()
+PERSISTENT_SHELL_GUARD_ANCHOR = "\n\nclass ToolFilterConfig"
+PERSISTENT_SHELL_GUARD_CALL_ANCHOR = """        if not action:
+            return False
+"""
+LEGACY_BLOCKLIST_ERROR_TEMPLATE = (
+    'blocklist_error_template: str = "Operation \'{{action}}\' is not supported '
+    'by this environment."'
+)
+PERSISTENT_BLOCKLIST_ERROR_TEMPLATE = """Operation '{{action}}' was not executed. The Bash
+tool uses a persistent REX shell. Remove top-level exit, logout, exec, kill $$, set -e,
+set -u, and broad pkill/killall commands. For isolated strict execution, use a subshell
+such as ( set -euo pipefail; command_1; command_2 ). Handle expected failures with
+if/else or || without exiting the parent shell."""
 
 
 @dataclass(frozen=True)
@@ -103,6 +205,51 @@ def _ensure_persistent_bash_docstring(omnicode_root: Path) -> bool:
         encoding="utf-8",
     )
     return True
+
+
+def _ensure_persistent_shell_guard(omnicode_root: Path) -> bool:
+    """Block shell commands that can terminate SWE-ReX's persistent session."""
+    tools_dir = omnicode_root / "SWE-agent" / "sweagent" / "tools"
+    changed = False
+    for filename in ("tools.py", "tools_apptainer.py"):
+        tools_path = tools_dir / filename
+        source = tools_path.read_text(encoding="utf-8")
+        updated = source
+        blocklist_replacement = (
+            f"blocklist_error_template: str = {PERSISTENT_BLOCKLIST_ERROR_TEMPLATE!r}"
+        )
+        if blocklist_replacement not in updated:
+            if LEGACY_BLOCKLIST_ERROR_TEMPLATE not in updated:
+                raise RuntimeError(f"Could not locate blocklist template in {tools_path}")
+            updated = updated.replace(
+                LEGACY_BLOCKLIST_ERROR_TEMPLATE,
+                blocklist_replacement,
+                1,
+            )
+        if PERSISTENT_SHELL_GUARD_MARKER not in updated:
+            if PERSISTENT_SHELL_GUARD_ANCHOR not in updated:
+                raise RuntimeError(f"Could not locate tool-filter anchor in {tools_path}")
+            updated = updated.replace(
+                PERSISTENT_SHELL_GUARD_ANCHOR,
+                f"\n\n{PERSISTENT_SHELL_GUARD_SOURCE}{PERSISTENT_SHELL_GUARD_ANCHOR}",
+                1,
+            )
+        guard_call = (
+            "        if _has_persistent_shell_violation(action):\n"
+            "            return True\n"
+        )
+        if guard_call not in updated:
+            if PERSISTENT_SHELL_GUARD_CALL_ANCHOR not in updated:
+                raise RuntimeError(f"Could not locate action-filter anchor in {tools_path}")
+            updated = updated.replace(
+                PERSISTENT_SHELL_GUARD_CALL_ANCHOR,
+                PERSISTENT_SHELL_GUARD_CALL_ANCHOR + guard_call,
+                1,
+            )
+        if updated != source:
+            tools_path.write_text(updated, encoding="utf-8")
+            changed = True
+    return changed
 
 
 def _omnicode_image_for_task(planned: PlannedTask) -> str:
@@ -648,12 +795,23 @@ def _load_verifier_result(run_dir: Path) -> tuple[bool | None, float | None]:
     )
 
 
+def _classify_completed_agent_run(run_dir: Path, task_id: str) -> str:
+    trajectory = _load_trajectory_payload(run_dir, task_id)
+    info = trajectory.get("info", {}) if trajectory else {}
+    info = info if isinstance(info, dict) else {}
+    final_patch = _load_final_patch(run_dir, task_id)
+    if info.get("exit_status") == "submitted" and final_patch and final_patch.strip():
+        return "completed_success"
+    return "completed_failure"
+
+
 def _build_distillation_record(
     run_dir: Path,
     *,
     task_id: str,
     language: str,
     workflow: str,
+    model: str,
     status: str,
     runtime: float,
 ) -> dict[str, Any]:
@@ -669,13 +827,13 @@ def _build_distillation_record(
     elif status in {"infra_failed", "timeout", "interrupted"}:
         success = None
     else:
-        exit_status = str(info.get("exit_status", ""))
-        success = exit_status == "submitted" if exit_status else status == "completed_success"
+        success = status == "completed_success"
 
     return {
         "task_id": task_id,
         "language": language,
         "workflow": workflow,
+        "model": model,
         "status": status,
         "success": success,
         "verifier_score": verifier_score,
@@ -752,12 +910,17 @@ def run_one(
             timeout_seconds=cleanup_timeout_seconds,
         )
     duration = time.monotonic() - started
-    manifest_status = "completed_success" if status == "completed" else status
+    manifest_status = (
+        _classify_completed_agent_run(run_dir, task_id)
+        if status == "completed"
+        else status
+    )
     record = _build_distillation_record(
         run_dir,
         task_id=task_id,
         language=planned.spec.language,
         workflow=planned.spec.workflow,
+        model=model,
         status=manifest_status,
         runtime=duration,
     )
@@ -846,14 +1009,122 @@ def _build_plan(
     seed: int,
     experiment_id: str,
     output_root: Path,
+    task_ids: set[str] | None = None,
     skip_task_ids: set[str] | None = None,
+    all_unseen: bool = False,
+    unrecorded: bool = False,
+    persist_selection: bool = True,
 ) -> list[PlannedTask]:
     selection_path = output_root / "selection_manifest.jsonl"
     manifest_path = output_root / "manifest.jsonl"
+    all_selection_rows = _read_jsonl(selection_path)
     selection_rows = [
-        row for row in _read_jsonl(selection_path) if row.get("experiment_id") == experiment_id
+        row for row in all_selection_rows if row.get("experiment_id") == experiment_id
     ]
     manifest_rows = _read_jsonl(manifest_path)
+
+    if all_unseen and unrecorded:
+        raise ValueError("--all-unseen and --unrecorded are mutually exclusive")
+
+    if unrecorded:
+        # Resume tasks reserved in selection history but never committed to the
+        # manifest. A manifest row means the attempt produced a durable record.
+        manifest_keys = {
+            (str(row["workflow"]), str(row["language"]), str(row["task_id"]))
+            for row in manifest_rows
+            if row.get("workflow") and row.get("language") and row.get("task_id")
+        }
+        selected_keys = {
+            (str(row["workflow"]), str(row["language"]), str(row["task_id"]))
+            for row in all_selection_rows
+            if row.get("workflow") and row.get("language") and row.get("task_id")
+        }
+        plan: list[PlannedTask] = []
+        skip_task_ids = skip_task_ids or set()
+        for workflow, group_specs in specs.items():
+            for spec in group_specs:
+                instances = load_instances(spec.dataset_path)
+                by_id = {str(instance["instance_id"]): instance for instance in instances}
+                candidates = []
+                for task_id in sorted(
+                    task_id
+                    for selected_workflow, selected_language, task_id in selected_keys
+                    if selected_workflow == workflow and selected_language == spec.language
+                ):
+                    key = (workflow, spec.language, task_id)
+                    instance = by_id.get(task_id)
+                    if (
+                        instance is None
+                        or key in manifest_keys
+                        or task_id in skip_task_ids
+                        or (task_ids is not None and task_id not in task_ids)
+                        or (spec.require_reviewfix_patch and not _has_reviewfix_patch(instance))
+                    ):
+                        continue
+                    candidates.append(instance)
+                random.Random(_group_seed(seed, workflow, spec.language)).shuffle(candidates)
+                for instance in candidates:
+                    task_id = str(instance["instance_id"])
+                    for attempt_id in range(1, attempts + 1):
+                        run_key = f"{experiment_id}:{workflow}:{spec.language}:{task_id}:{attempt_id}"
+                        plan.append(PlannedTask(spec, instance, attempt_id, run_key))
+        return plan
+
+    if all_unseen:
+        # Selection rows reserve tasks before execution, so they count even when
+        # the corresponding run was interrupted or failed during infrastructure setup.
+        seen_keys = {
+            (str(row["workflow"]), str(row["language"]), str(row["task_id"]))
+            for row in [*all_selection_rows, *manifest_rows]
+            if row.get("workflow") and row.get("language") and row.get("task_id")
+        }
+        plan: list[PlannedTask] = []
+        skip_task_ids = skip_task_ids or set()
+        new_selection_rows: list[dict[str, Any]] = []
+        for workflow, group_specs in specs.items():
+            for spec in group_specs:
+                instances = load_instances(spec.dataset_path)
+                candidates: list[dict[str, Any]] = []
+                local_ids: set[str] = set()
+                for instance in instances:
+                    task_id = str(instance.get("instance_id", ""))
+                    key = (workflow, spec.language, task_id)
+                    if (
+                        not task_id
+                        or task_id in skip_task_ids
+                        or key in seen_keys
+                        or task_id in local_ids
+                        or (task_ids is not None and task_id not in task_ids)
+                        or (spec.require_reviewfix_patch and not _has_reviewfix_patch(instance))
+                    ):
+                        continue
+                    candidates.append(instance)
+                    local_ids.add(task_id)
+                candidates.sort(key=lambda item: str(item["instance_id"]))
+                random.Random(_group_seed(seed, workflow, spec.language)).shuffle(candidates)
+                for instance in candidates:
+                    task_id = str(instance["instance_id"])
+                    key = (workflow, spec.language, task_id)
+                    seen_keys.add(key)
+                    new_selection_rows.append(
+                        {
+                            "experiment_id": experiment_id,
+                            "workflow": workflow,
+                            "language": spec.language,
+                            "task_id": task_id,
+                            "seed": seed,
+                        }
+                    )
+                    for attempt_id in range(1, attempts + 1):
+                        run_key = f"{experiment_id}:{workflow}:{spec.language}:{task_id}:{attempt_id}"
+                        plan.append(PlannedTask(spec, instance, attempt_id, run_key))
+        if new_selection_rows and persist_selection:
+            selection_path.parent.mkdir(parents=True, exist_ok=True)
+            with selection_path.open("a", encoding="utf-8") as stream:
+                for row in new_selection_rows:
+                    stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return plan
+
     completed = _completed_run_keys(manifest_rows)
     selected_by_group: dict[tuple[str, str], list[str]] = {}
     for row in selection_rows:
@@ -872,30 +1143,33 @@ def _build_plan(
             existing_ids = selected_by_group.get(group_key, [])
             instances = load_instances(spec.dataset_path)
             by_id = {str(instance["instance_id"]): instance for instance in instances}
-            missing = target_per_group - len(existing_ids)
-            if missing > 0:
-                candidates = select_tasks(
-                    instances,
-                    limit=missing,
-                    seed=_group_seed(seed, workflow, spec.language),
-                    completed_ids=set(existing_ids),
-                    require_reviewfix_patch=spec.require_reviewfix_patch,
-                )
-                for instance in candidates:
-                    task_id = str(instance["instance_id"])
-                    existing_ids.append(task_id)
-                    if (workflow, spec.language, task_id) not in known_selection_keys:
-                        new_selection_rows.append(
-                            {
-                                "experiment_id": experiment_id,
-                                "workflow": workflow,
-                                "language": spec.language,
-                                "task_id": task_id,
-                                "seed": seed,
-                            }
-                        )
-                        known_selection_keys.add((workflow, spec.language, task_id))
-            for task_id in existing_ids[:target_per_group]:
+            if task_ids is not None:
+                existing_ids = sorted(task_ids.intersection(by_id))
+            else:
+                missing = target_per_group - len(existing_ids)
+                if missing > 0:
+                    candidates = select_tasks(
+                        instances,
+                        limit=missing,
+                        seed=_group_seed(seed, workflow, spec.language),
+                        completed_ids=set(existing_ids),
+                        require_reviewfix_patch=spec.require_reviewfix_patch,
+                    )
+                    existing_ids.extend(str(instance["instance_id"]) for instance in candidates)
+            for task_id in existing_ids:
+                if (workflow, spec.language, task_id) not in known_selection_keys:
+                    new_selection_rows.append(
+                        {
+                            "experiment_id": experiment_id,
+                            "workflow": workflow,
+                            "language": spec.language,
+                            "task_id": task_id,
+                            "seed": seed,
+                        }
+                    )
+                    known_selection_keys.add((workflow, spec.language, task_id))
+            selected_ids = existing_ids if task_ids is not None else existing_ids[:target_per_group]
+            for task_id in selected_ids:
                 if task_id in skip_task_ids:
                     continue
                 instance = by_id.get(task_id)
@@ -905,7 +1179,7 @@ def _build_plan(
                     run_key = f"{experiment_id}:{workflow}:{spec.language}:{task_id}:{attempt_id}"
                     if run_key not in completed:
                         plan.append(PlannedTask(spec, instance, attempt_id, run_key))
-    if new_selection_rows:
+    if new_selection_rows and persist_selection:
         selection_path.parent.mkdir(parents=True, exist_ok=True)
         with selection_path.open("a", encoding="utf-8") as stream:
             for row in new_selection_rows:
@@ -926,7 +1200,11 @@ def collect(args: argparse.Namespace) -> int:
         seed=args.seed,
         experiment_id=experiment_id,
         output_root=output_root,
+        task_ids=set(args.task_ids) if args.task_ids else None,
         skip_task_ids=set(args.skip_task_ids),
+        all_unseen=args.all_unseen,
+        unrecorded=args.unrecorded,
+        persist_selection=not args.dry_run,
     )
     print(f"experiment_id={experiment_id}")
     print(f"planned_runs={len(plan)}")
@@ -950,6 +1228,8 @@ def collect(args: argparse.Namespace) -> int:
         raise FileNotFoundError(f"OmniCode SWE-agent runner not found: {runner}")
     if _ensure_persistent_bash_docstring(omnicode_root):
         print("Updated SWE-Agent Bash tool documentation for persistent REX sessions.")
+    if _ensure_persistent_shell_guard(omnicode_root):
+        print("Installed SWE-Agent guard for persistent REX shell sessions.")
 
     stop_event = threading.Event()
     immediate_stop = threading.Event()
@@ -1073,7 +1353,22 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--languages", nargs="+", choices=LANGUAGES, default=list(LANGUAGES))
     parser.add_argument("--workflows", nargs="+", choices=WORKFLOWS, default=list(WORKFLOWS))
     parser.add_argument("--target-per-group", type=int, default=10)
+    parser.add_argument(
+        "--all-unseen",
+        action="store_true",
+        help="Run every eligible task whose (workflow, language, task_id) is absent from both manifests.",
+    )
+    parser.add_argument(
+        "--unrecorded",
+        action="store_true",
+        help="Resume selected tasks that have no manifest record yet; excludes every task already attempted.",
+    )
     parser.add_argument("--num-attempts", type=int, default=1)
+    parser.add_argument(
+        "--task-ids",
+        nargs="+",
+        help="Run only these task IDs within the selected languages and workflows.",
+    )
     parser.add_argument(
         "--skip-task-ids",
         nargs="*",
@@ -1126,13 +1421,13 @@ def make_parser() -> argparse.ArgumentParser:
         "--max-cost-per-task",
         type=float,
         default=DEFAULT_MAX_COST_PER_TASK,
-        help="Stop one SWE-Agent run after this estimated model cost.",
+        help="Stop one SWE-Agent run after this estimated model cost; 0 disables the cost limit.",
     )
     parser.add_argument(
         "--max-api-calls-per-task",
         type=int,
         default=DEFAULT_MAX_API_CALLS_PER_TASK,
-        help="Stop one SWE-Agent run after this many teacher API calls.",
+        help="Stop one SWE-Agent run after this many teacher API calls; 0 disables the call limit.",
     )
     parser.add_argument("--use-apptainer", action="store_true")
     parser.add_argument(
