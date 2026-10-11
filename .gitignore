@@ -14,8 +14,10 @@ dist/
 tests/test_omnicode_collector.py
 
 # Generated experiment artifacts
-data/
-outputs/
+/data/*
+!/data/README.md
+/outputs/*
+!/outputs/README.md
 checkpoints/
 wandb/
 
@@ -29,3 +31,6 @@ teacher_dataset/
 
 # Local agent planning artifacts
 docs/superpowers/
+
+# Local KRun job history and downloaded artifacts
+.krun/
