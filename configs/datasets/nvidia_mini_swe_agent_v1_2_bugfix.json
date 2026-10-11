@@ -1,0 +1,59 @@
+{
+  "description": "CPU-only phase-1 cold-start preparation; no local fine-tuning or model evaluation. Historical filename retained for compatibility.",
+  "dataset": {
+    "id": "nvidia/Open-SWE-Traces",
+    "revision": "e192b26a43b8d09f156eeee781aef8e6bd5108ba",
+    "config": "v1.2",
+    "split": "minisweagent",
+    "data_files": "data/minisweagent/qwen38_27b/*/*.parquet"
+  },
+  "selection": {
+    "teacher": "Qwen3.8-27B",
+    "harness": "mini-swe-agent",
+    "resolved": 1,
+    "teacher_enable_thinking": true
+  },
+  "phase1": {
+    "categories": ["bug-fix", "feature-request", "enhancement", "other"],
+    "train_per_category": 250,
+    "validation_per_category": 25,
+    "seed": 42,
+    "sampling": "Round-robin shuffled repositories, unique canonical tasks; invalid records replaced within category"
+  },
+  "leakage": {
+    "canonical_benchmark_keys": "reports/data_overlap_2026-10-10/omnicode_base_keys.csv",
+    "benchmark_id": "seal-research/OmniCode",
+    "benchmark_revision": "87de6c4e0ecdb132bfcba96ee2e0a624ce6f26ad",
+    "source_checksums": "reports/data_overlap_2026-10-10/source_index_sha256.json",
+    "benchmark_scope": "All 494 base and 415 style instances; base CSV alone is insufficient",
+    "audit_exclusions": "reports/data_overlap_2026-10-11_v1_2/training_exclusions.json",
+    "exclude_before_splitting": true,
+    "split_group_key": "canonical_task_key",
+    "canonical_task_key_definition": "case-insensitive repository + normalized PR number; derived from instance_id to group Scale-SWE and SWE-rebench variants of the same task"
+  },
+  "local_paths": {
+    "raw": "data/raw/nvidia_open_swe_traces",
+    "interim": "data/interim",
+    "processed": "data/processed/mini_swe_agent_v1_2_phase1",
+    "splits": "data/splits",
+    "manifests": "data/manifests"
+  },
+  "student": {
+    "primary": "Qwen/Qwen3.5-4B",
+    "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+    "tokenizer_path": "data/raw/qwen35_4b_tokenizer",
+    "revision_resolved_on": "2026-10-11",
+    "local_role": "Dataset preparation and tokenizer storage only; no model weights required, no local tuning"
+  },
+  "training_target": {
+    "platform": "kaggle",
+    "submission_tool": "krun",
+    "requested_accelerator": "T4",
+    "verify_remote_gpu_count": true,
+    "method": "qlora"
+  },
+  "reasoning": {
+    "preserve_teacher_reasoning": true,
+    "serialization": "Use the student chat template; inspect source messages before mapping reasoning and actions."
+  }
+}
