@@ -1,0 +1,28 @@
+{
+  "dataset": "nvidia/Open-SWE-Traces",
+  "revision": "e192b26a43b8d09f156eeee781aef8e6bd5108ba",
+  "config": "v1.2",
+  "split": "minisweagent",
+  "teacher": "Qwen3.8-27B",
+  "teacher_enable_thinking": true,
+  "student": "Qwen/Qwen3.5-4B",
+  "shards": 44,
+  "trajectories": 107267,
+  "source_trajectories": {
+    "scale-swe": 53553,
+    "swe-rebench-v2": 53714
+  },
+  "categories": {
+    "enhancement": 13384,
+    "other": 7341,
+    "bug-fix": 54177,
+    "feature-request": 32365
+  },
+  "successful_thinking_bugfix_before_exclusion": 26770,
+  "omnicode_overlap_all_trajectories": 7,
+  "omnicode_overlap_base_tasks": 3,
+  "successful_thinking_bugfix_excluded": 2,
+  "successful_thinking_bugfix_after_exclusion": 26768,
+  "omnicode_revision": "87de6c4e0ecdb132bfcba96ee2e0a624ce6f26ad",
+  "method": "Canonical case-insensitive repository + PR number, using the full 2026-10-10 exact-task overlap audit; metadata.teacher_model and category scanned across all 44 v1.2 shards."
+}

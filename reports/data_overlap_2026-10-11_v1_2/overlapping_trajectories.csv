@@ -1,0 +1,8 @@
+omnicode_id,repo,pr_number,omnicode_language,nvidia_instance_id,harness,teacher,resolved,trajectory_id,source_file,in_primary_scope,category,enable_thinking
+scrapy__scrapy-6050,scrapy/scrapy,6050,python,scrapy__scrapy-6050,minisweagent,qwen38_27b,1,c502bc32-4615-4e80-830f-2931994162c9,data/minisweagent/qwen38_27b/swe-rebench-v2/train-00012-of-00022.parquet,False,bug-fix,True
+scrapy__scrapy-6050,scrapy/scrapy,6050,python,scrapy__scrapy-6050,minisweagent,qwen38_27b,1,ac1c0f65-863a-4dc0-be0e-2d031231f212,data/minisweagent/qwen38_27b/swe-rebench-v2/train-00015-of-00022.parquet,False,bug-fix,True
+scrapy__scrapy-6469,scrapy/scrapy,6469,python,scrapy__scrapy-6469,minisweagent,qwen38_27b,1,affffb2e-1555-4df6-909f-0907a59713d9,data/minisweagent/qwen38_27b/swe-rebench-v2/train-00009-of-00022.parquet,False,feature-request,True
+scrapy__scrapy-6469,scrapy/scrapy,6469,python,scrapy__scrapy-6469,minisweagent,qwen38_27b,1,6de00629-53cf-4d23-ac9d-0b67e1d74566,data/minisweagent/qwen38_27b/swe-rebench-v2/train-00020-of-00022.parquet,False,feature-request,True
+simdjson__simdjson_2016,simdjson/simdjson,2016,cpp,simdjson__simdjson-2016,minisweagent,qwen38_27b,0,335442ab-00e8-40ef-8bf2-b399d6c245c0,data/minisweagent/qwen38_27b/swe-rebench-v2/train-00000-of-00022.parquet,False,feature-request,True
+simdjson__simdjson_2016,simdjson/simdjson,2016,cpp,simdjson__simdjson-2016,minisweagent,qwen38_27b,0,63378dec-c9aa-40b1-a34e-d1928f1e4aec,data/minisweagent/qwen38_27b/swe-rebench-v2/train-00011-of-00022.parquet,False,feature-request,True
+simdjson__simdjson_2016,simdjson/simdjson,2016,cpp,simdjson__simdjson-2016,minisweagent,qwen38_27b,0,d0d9561b-e650-4c90-ad85-8ab80191f790,data/minisweagent/qwen38_27b/swe-rebench-v2/train-00016-of-00022.parquet,False,feature-request,True

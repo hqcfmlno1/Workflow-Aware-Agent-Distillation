@@ -1,0 +1,45 @@
+{
+  "nvidia_revision": "e192b26a43b8d09f156eeee781aef8e6bd5108ba",
+  "omnicode_revision": "87de6c4e0ecdb132bfcba96ee2e0a624ce6f26ad",
+  "scope": "data/minisweagent/qwen38_27b/*/*.parquet",
+  "known_overlapping_repo_pr": [
+    {
+      "repo": "scrapy/scrapy",
+      "pr_number": 6050,
+      "omnicode_id": "scrapy__scrapy-6050"
+    },
+    {
+      "repo": "scrapy/scrapy",
+      "pr_number": 6469,
+      "omnicode_id": "scrapy__scrapy-6469"
+    },
+    {
+      "repo": "simdjson/simdjson",
+      "pr_number": 2016,
+      "omnicode_id": "simdjson__simdjson_2016"
+    }
+  ],
+  "excluded_instance_ids_all_categories": [
+    "scrapy__scrapy-6050",
+    "scrapy__scrapy-6469",
+    "simdjson__simdjson-2016"
+  ],
+  "excluded_trajectory_ids_all_categories": [
+    "335442ab-00e8-40ef-8bf2-b399d6c245c0",
+    "63378dec-c9aa-40b1-a34e-d1928f1e4aec",
+    "6de00629-53cf-4d23-ac9d-0b67e1d74566",
+    "ac1c0f65-863a-4dc0-be0e-2d031231f212",
+    "affffb2e-1555-4df6-909f-0907a59713d9",
+    "c502bc32-4615-4e80-830f-2931994162c9",
+    "d0d9561b-e650-4c90-ad85-8ab80191f790"
+  ],
+  "successful_bugfix_excluded_instance_ids": [
+    "scrapy__scrapy-6050"
+  ],
+  "successful_bugfix_excluded_trajectory_ids": [
+    "ac1c0f65-863a-4dc0-be0e-2d031231f212",
+    "c502bc32-4615-4e80-830f-2931994162c9"
+  ],
+  "exclude_before_splitting": true,
+  "benchmark_keys": "reports/data_overlap_2026-10-10/omnicode_base_keys.csv"
+}
