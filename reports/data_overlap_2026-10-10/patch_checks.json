@@ -1,0 +1,42 @@
+{
+  "sample_per_base_pr": [
+    {
+      "omnicode_id": "scrapy__scrapy-6050",
+      "nvidia_id": "scrapy__scrapy-6050",
+      "trajectory_id": "88924d6d-49a5-4ea7-a06d-1d679855e448",
+      "source_file": "data/sweagent/qwen36_27b/swe-rebench-v2/train-00012-of-00015.parquet",
+      "category": "bug-fix",
+      "normalized_reference_patch_match": true
+    },
+    {
+      "omnicode_id": "scrapy__scrapy-6469",
+      "nvidia_id": "scrapy__scrapy-6469",
+      "trajectory_id": "ad7d6baf-e79d-44ce-b5bf-af72481b3a77",
+      "source_file": "data/sweagent/minimax_m25/swe-rebench-v2/train-00008-of-00019.parquet",
+      "category": "feature-request",
+      "normalized_reference_patch_match": true
+    },
+    {
+      "omnicode_id": "simdjson__simdjson_2016",
+      "nvidia_id": "simdjson__simdjson-2016",
+      "trajectory_id": "3b6bbfe0-d36a-495d-abdf-c9a50d4e041e",
+      "source_file": "data/sweagent/qwen36_27b/swe-rebench-v2/train-00008-of-00015.parquet",
+      "category": "feature-request",
+      "normalized_reference_patch_match": false
+    }
+  ],
+  "primary_scope": {
+    "instance_id": "scrapy__scrapy-6050",
+    "category": "bug-fix",
+    "teacher": "Qwen3.5-122B-A10B",
+    "enable_thinking": false,
+    "reference_patch_normalized_equal": true
+  },
+  "simdjson_detail": {
+    "same_repo_pr": true,
+    "exact_normalized_patch_equal": false,
+    "shared_files": 7,
+    "equal_normalized_shared_files": 7,
+    "nvidia_has_one_additional_file": true
+  }
+}

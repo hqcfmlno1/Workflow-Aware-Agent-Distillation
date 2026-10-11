@@ -1,0 +1,40 @@
+{
+  "nvidia_revision": "e192b26a43b8d09f156eeee781aef8e6bd5108ba",
+  "omnicode_revision": "87de6c4e0ecdb132bfcba96ee2e0a624ce6f26ad",
+  "nvidia_shards": 216,
+  "nvidia_trajectories": 521712,
+  "nvidia_unique_repo_pr": 42248,
+  "nvidia_groups": {
+    "minisweagent/qwen36_27b": 95291,
+    "minisweagent/qwen38_27b": 107267,
+    "openhands/deepseek_v4_flash_0731": 50295,
+    "openhands/minimax_m25": 43603,
+    "openhands/qwen35_122b": 40463,
+    "openhands/qwen36_27b": 40379,
+    "sweagent/minimax_m25": 46819,
+    "sweagent/qwen35_122b": 20334,
+    "sweagent/qwen36_27b": 77261
+  },
+  "omnicode_base_instances": 494,
+  "omnicode_style_instances": 415,
+  "base_overlaps": 3,
+  "style_overlaps": 0,
+  "primary_scope": {
+    "path": "data/sweagent/qwen35_122b/swe-rebench-v2/",
+    "shards": 9,
+    "trajectories": 20334,
+    "unique_repo_pr": 10511,
+    "resolved_1": 7348,
+    "overlapping_omnicode_base_instances": 1,
+    "overlapping_trajectories": 3,
+    "overlapping_resolved_1": 3
+  },
+  "overlapping_trajectories_all_scopes": 48,
+  "matching_method": "Case-insensitive repository + PR number; normalize -NUMBER, _NUMBER and _prNUMBER; style uses original_instance_id or pull_number.",
+  "limitations": [
+    "No exhaustive semantic matching of different PRs addressing the same issue.",
+    "No inference about contamination in student pretraining.",
+    "Patch comparisons sample one NVIDIA trajectory per overlapping base PR, plus all three primary trajectory reference patches.",
+    "Counts apply only to the pinned dataset revisions."
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "nvidia_revision": "e192b26a43b8d09f156eeee781aef8e6bd5108ba",
+  "omnicode_revision": "87de6c4e0ecdb132bfcba96ee2e0a624ce6f26ad",
+  "known_overlapping_repo_pr": [
+    {
+      "repo": "scrapy/scrapy",
+      "pr_number": 6050,
+      "omnicode_id": "scrapy__scrapy-6050"
+    },
+    {
+      "repo": "scrapy/scrapy",
+      "pr_number": 6469,
+      "omnicode_id": "scrapy__scrapy-6469"
+    },
+    {
+      "repo": "simdjson/simdjson",
+      "pr_number": 2016,
+      "omnicode_id": "simdjson__simdjson_2016"
+    }
+  ],
+  "primary_scope_excluded_instance_ids": [
+    "scrapy__scrapy-6050"
+  ],
+  "primary_scope_excluded_trajectory_ids": [
+    "65cc59b6-5497-44fe-bdec-e6844c0e5856",
+    "5460dd3c-5f6f-4579-949b-c6f9ad267790",
+    "334ad630-6eef-4af2-8882-4c23d422342a"
+  ],
+  "recommendation": "Exclude all trajectories for these canonical repository/PR keys from training and training-validation if OmniCode is used for evaluation. Apply before splitting, and across teachers/harnesses. Prefer excluding against the full benchmark key list for future dataset revisions."
+}
