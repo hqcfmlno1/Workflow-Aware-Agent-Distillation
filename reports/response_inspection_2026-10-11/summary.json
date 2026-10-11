@@ -1,0 +1,94 @@
+{
+  "dataset": "nvidia/Open-SWE-Traces",
+  "revision": "e192b26a43b8d09f156eeee781aef8e6bd5108ba",
+  "config": "v1.2",
+  "split": "minisweagent",
+  "method": "Read messages/tools/metadata.teacher_model from the complete first Parquet shard of each source; two shards, not all 44.",
+  "sources": {
+    "scale-swe": {
+      "trajectories": 2500,
+      "roles": {
+        "system": 2500,
+        "user": 2506,
+        "assistant": 120202,
+        "tool": 138323
+      },
+      "assistant_fields": {
+        "assistant_messages": 120202,
+        "nonempty_content": 108474,
+        "nonempty_reasoning_content": 120202,
+        "nonempty_tool_calls": 120202,
+        "content_contains_bash_fence": 1,
+        "content_contains_think_tag": 0
+      },
+      "tool_calls_per_assistant": {
+        "1": 99791,
+        "2": 20219,
+        "3": 175,
+        "4": 16,
+        "5": 1
+      },
+      "tool_call_function_names": {
+        "bash": 140823
+      },
+      "tool_definitions_by_name": {
+        "bash": 2500
+      },
+      "teacher_metadata": {
+        "{'name': 'Qwen3.8-27B', 'enable_thinking': True, 'reasoning_effort': 'xhigh'}": 2500
+      },
+      "stored_message_fields": [
+        "role",
+        "content",
+        "reasoning_content",
+        "tool_calls"
+      ]
+    },
+    "swe-rebench-v2": {
+      "trajectories": 2500,
+      "roles": {
+        "system": 2500,
+        "user": 2512,
+        "assistant": 135758,
+        "tool": 160963
+      },
+      "assistant_fields": {
+        "assistant_messages": 135758,
+        "nonempty_content": 115363,
+        "nonempty_reasoning_content": 135758,
+        "nonempty_tool_calls": 135758,
+        "content_contains_bash_fence": 0,
+        "content_contains_think_tag": 0
+      },
+      "tool_calls_per_assistant": {
+        "1": 108231,
+        "2": 27356,
+        "3": 164,
+        "4": 7
+      },
+      "tool_call_function_names": {
+        "bash": 163463
+      },
+      "tool_definitions_by_name": {
+        "bash": 2500
+      },
+      "teacher_metadata": {
+        "{'name': 'Qwen3.8-27B', 'enable_thinking': True, 'reasoning_effort': 'xhigh'}": 2500
+      },
+      "stored_message_fields": [
+        "role",
+        "content",
+        "reasoning_content",
+        "tool_calls"
+      ]
+    }
+  },
+  "total_trajectories": 5000,
+  "total_assistant_messages": 255960,
+  "limitations": [
+    "Only two of 44 v1.2 shards inspected for message contents.",
+    "No original provider responses available for byte-for-byte or lossless comparison.",
+    "Parquet stores a normalized message schema; API usage/finish_reason/logprobs and tool-result tool_call_id are not message fields in this schema.",
+    "Thinking metadata and nonempty reasoning text do not prove absence of upstream truncation."
+  ]
+}
