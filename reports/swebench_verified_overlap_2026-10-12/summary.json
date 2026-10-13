@@ -1,0 +1,31 @@
+{
+  "benchmark_revision": "c104f840cc67f8b6eec6f759ebc8b2693d585d4a",
+  "benchmark_tasks": 500,
+  "nvidia_revision": "e192b26a43b8d09f156eeee781aef8e6bd5108ba",
+  "nvidia_split": "v1.2/minisweagent/qwen38_27b",
+  "shards": 44,
+  "source_trajectories": 107267,
+  "source_unique_tasks": 41203,
+  "overlapping_trajectories": 0,
+  "overlapping_tasks": 0,
+  "overlap_sources": {},
+  "selected_splits": {
+    "train": {
+      "trajectories": 1000,
+      "overlap_tasks": 0,
+      "task_keys": []
+    },
+    "validation": {
+      "trajectories": 50,
+      "overlap_tasks": 0,
+      "task_keys": []
+    },
+    "train_pool": {
+      "trajectories": 49804,
+      "overlap_tasks": 0,
+      "task_keys": []
+    }
+  },
+  "method": "Exact canonical lower-case repository + PR number from instance_id; does not detect different PRs for the same issue or semantic duplicates.",
+  "test_policy": "All 500 SWE-bench Verified tasks reserved for final evaluation; no internal NVIDIA test split"
+}
