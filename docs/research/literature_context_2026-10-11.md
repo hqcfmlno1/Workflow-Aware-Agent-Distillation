@@ -65,7 +65,7 @@ Post-error recovery là candidate gap của nhóm literature đã khảo sát, c
 
 ## Nguyên tắc cho lần thiết kế kế hoạch tiếp theo
 
-- Đo base student trong harness trước; cold start có cần thiết và quy mô bao nhiêu phải dựa vào evidence.
+- Đo base student trong harness trước; nhu cầu Action-focused SFT và quy mô dữ liệu phải dựa vào evidence.
 - Có baseline successful-trajectory SFT trước khi quy kết cải thiện cho behavior-aware method.
 - Giữ observations làm context; xác định rõ reasoning/action/termination spans được supervise và cách serialize cho Qwen3.5.
 - Thinking bật trong metadata chưa chứng minh reasoning luôn hiện diện hoặc được serialize đúng trong mọi mẫu.
@@ -79,6 +79,6 @@ Post-error recovery là candidate gap của nhóm literature đã khảo sát, c
 
 ## Câu hỏi đang để mở
 
-Cold start cần thiết đến mức nào? Bao nhiêu task/token là đủ? Ưu tiên task coverage hay nhiều attempts cùng task? Reasoning và action nên normalize/weight thế nào? Có evidence recovery hữu ích trong dữ liệu public không? Làm sao phân biệt signal workflow với teacher style hoặc harness constraints? Những hướng cần student rollout/teacher correction có vừa compute budget không?
+Action-focused SFT cải thiện hành vi agent đến mức nào? Bao nhiêu task/token là đủ? Ưu tiên task coverage hay nhiều attempts cùng task? Reasoning và action nên normalize/weight thế nào? Có evidence recovery hữu ích trong dữ liệu public không? Làm sao phân biệt signal workflow với teacher style hoặc harness constraints? Những hướng cần student rollout/teacher correction có vừa compute budget không?
 
-Nguồn tham chiếu hiện có trong repo: `configs/datasets/nvidia_mini_swe_agent_v1_2_bugfix.json`, `docs/data_overlap_v1_2_2026-10-11.md`. Chưa sửa Google Doc hoặc triển khai phương pháp distillation mới trong lần đọc này.
+Nguồn tham chiếu hiện có trong repo: `configs/datasets/nvidia_mini_swe_agent_v1_2_action_focused_sft.json`, `docs/data_overlap_v1_2_2026-10-11.md`. Chưa sửa Google Doc hoặc triển khai phương pháp distillation mới trong lần đọc này.
