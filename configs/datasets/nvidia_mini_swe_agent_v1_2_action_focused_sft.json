@@ -1,5 +1,5 @@
 {
-  "description": "CPU-only phase-1 cold-start preparation; no local fine-tuning or model evaluation. Historical filename retained for compatibility.",
+  "description": "CPU-only phase-1 Action-focused SFT preparation; no local fine-tuning or model evaluation.",
   "dataset": {
     "id": "nvidia/Open-SWE-Traces",
     "revision": "e192b26a43b8d09f156eeee781aef8e6bd5108ba",
@@ -14,11 +14,23 @@
     "teacher_enable_thinking": true
   },
   "phase1": {
-    "categories": ["bug-fix", "feature-request", "enhancement", "other"],
+    "categories": [
+      "bug-fix",
+      "feature-request",
+      "enhancement",
+      "other"
+    ],
     "train_per_category": 250,
-    "validation_per_category": 25,
+    "validation_per_category": {
+      "bug-fix": 13,
+      "feature-request": 13,
+      "enhancement": 12,
+      "other": 12
+    },
     "seed": 42,
-    "sampling": "Round-robin shuffled repositories, unique canonical tasks; invalid records replaced within category"
+    "sampling": "Round-robin shuffled repositories, unique canonical tasks; invalid records replaced within category",
+    "heldout_per_category": 25,
+    "heldout_split": "Keep the same 50 seeded validation tasks from the original 100 reserved tasks; release the other 50 to the training pool. No internal test split."
   },
   "leakage": {
     "canonical_benchmark_keys": "reports/data_overlap_2026-10-10/omnicode_base_keys.csv",
@@ -55,5 +67,14 @@
   "reasoning": {
     "preserve_teacher_reasoning": true,
     "serialization": "Use the student chat template; inspect source messages before mapping reasoning and actions."
+  },
+  "test_evaluation": {
+    "dataset": "princeton-nlp/SWE-bench_Verified",
+    "revision": "c104f840cc67f8b6eec6f759ebc8b2693d585d4a",
+    "split": "test",
+    "tasks": 500,
+    "overlap_audit": "reports/swebench_verified_overlap_2026-10-12/summary.json",
+    "benchmark_keys": "reports/swebench_verified_overlap_2026-10-12/benchmark_keys.json",
+    "use": "Final evaluation only; no checkpoint or hyperparameter selection"
   }
 }

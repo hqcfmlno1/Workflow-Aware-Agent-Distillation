@@ -1,4 +1,8 @@
-# Cold start phase 1
+# Action-focused SFT — Phase 1
+
+Phase 1 tinh chỉnh một student đã có năng lực agent, ưu tiên tool calls, Bash commands
+và hành vi submit từ teacher trajectories. Tên Action-focused SFT mô tả mục tiêu này.
+Thiết kế loss nằm trong [tài liệu hàm loss](action_focused_sft_loss_design.md).
 
 Máy local chỉ chuẩn bị dữ liệu trên CPU và lưu tokenizer/chat template; fine-tune chạy
 ở môi trường khác (dự kiến Kaggle). Pipeline không tải weights, khởi tạo model, dùng GPU,
@@ -8,20 +12,24 @@ train/evaluate student hoặc thực thi command teacher. Collector SWE-agent c�
 
 ```bash
 uv sync --extra data
-uv run python scripts/data/prepare_cold_start.py
-uv run python scripts/data/prepare_cold_start.py --offline
-uv run python scripts/data/prepare_cold_start.py --verify
+uv run python scripts/data/prepare_action_focused_sft.py
+uv run python scripts/data/prepare_action_focused_sft.py --offline
+uv run python scripts/data/prepare_action_focused_sft.py --verify
 ```
 
 Extra `data` chứa transformers/tokenizers, Jinja2, jsonschema; không cần extra `train`.
 Offline cần cache đầy đủ. Output đã có `report.json` không bị ghi đè; đổi
 `local_paths.processed` trong config để chạy mới. Lần chưa hoàn tất dùng tiếp cache được.
 
-Manifest giữ tên lịch sử `nvidia_mini_swe_agent_v1_2_bugfix.json` nhưng có `phase1` riêng:
-250 train + 25 validation cho mỗi category bug-fix, feature-request, enhancement, other.
+Manifest `nvidia_mini_swe_agent_v1_2_action_focused_sft.json` có selection `phase1` riêng:
+250 train + 25 held-out cho mỗi category bug-fix, feature-request, enhancement, other.
+Giữ 50 validation theo seed 42, có lần lượt 13/13/12/12 mẫu theo thứ tự category trên.
+50 task còn lại từ reserve cũ được trả về training pool. Train pilot 1.000 giữ nguyên.
+Không có test nội bộ; test cuối dùng 500 task SWE-bench Verified theo config.
 Teacher Qwen3.8-27B Thinking, resolved=1, revision NVIDIA đã audit, đủ 44 shard.
 Sắp xếp trước khi shuffle repository/task/attempt bằng seed 42; luân phiên repository,
-validation trước, một trajectory mỗi task. Thiếu quota thì dừng, không đổi phân bố.
+held-out trước, một trajectory mỗi task. Sau đó sort task key và shuffle theo seed 42
+trong từng category để chọn validation; phần còn lại trở về pool. Thiếu quota thì dừng, không đổi phân bố.
 
 Đọc đủ 494 base + 415 style OmniCode, checksum sáu file phải khớp audit. Khóa task là
 repo viết thường + số PR; style dùng original_instance_id/pull_number để tránh nhầm số
@@ -87,3 +95,48 @@ Command động, substitutions, scripts chưa có nội dung, PATH thay đổi h
 environment chưa có là unverified. Availability không đồng nghĩa exit code 0 hoặc giải
 đúng task. Phân loại thao tác trong report chỉ là heuristic chương trình đầu tiên,
 không phải metric availability. Dataset qua kiểm tra chưa chứng minh LoRA đạt mục tiêu.
+
+## Test cuối và dữ liệu lịch sử
+
+Test cuối là 500 task `princeton-nlp/SWE-bench_Verified`, revision
+`c104f840cc67f8b6eec6f759ebc8b2693d585d4a`. Config `test_evaluation` ghi dataset,
+revision, split và audit. Không dùng test để chọn checkpoint hoặc hyperparameter.
+Audit `reports/swebench_verified_overlap_2026-10-12/` xác nhận không trùng repository
++ PR với 107.267 trajectories nguồn; chưa kiểm semantic duplicates hoặc issue chung.
+
+Validation hiện tại giữ nguyên 50 task đã chọn. Mọi attempts của 50 task từng thuộc
+test nội bộ đã trở về pool. `test.jsonl` cũ, manifest/report và success export cũ được
+lưu trong `data/interim/archive_internal_test_2026-10-12/`, ngoài các đường dẫn đang dùng.
+Train/validation processed vẫn là trajectory đầy đủ, chưa tạo next-action examples
+hoặc labels. Export success hiện hành đánh dấu `train_pool`, `validation` và
+`excluded_omnicode`. Chuẩn bị train toàn bộ success pool là bước riêng, chưa thực hiện.
+
+## Full-corpus template conversion
+
+The separate CPU-only `scripts/data/convert_success_trajectories.py` pipeline
+renders every success-export row using the same pinned official Qwen3.5-4B
+tokenizer as the pilot. Its sharded gzip JSONL outputs are under
+`data/processed/nvidia_mini_swe_agent_v1_2_success_qwen35_4b/`. It preserves task
+partitions and all attempts, and does not change the 1,000+50 pilot selection.
+Normalization failures remain as explicit error records with original payloads;
+there is no silent replacement or dropping. Loss masks and SFT training labels
+remain a subsequent trainer-specific step. See `data/README.md` for build, replay
+verification, and streaming-read commands.
+
+## Rule-selected SFT baseline (2026-10-13)
+
+The current baseline selection is 4,000 distinct train-pool tasks with multiple
+successful attempts, selecting one original Qwen-rendered trajectory per task.
+`scripts/data/select_rule_trajectories.py` ranks candidates lexicographically by
+confirmed historical shell usage errors, consecutive duplicate action/observation
+blocks, serialized token count, tool-call count, and trajectory ID. It excludes
+schema-invalid calls and keeps held-out tasks out of all sampling. Category quotas
+are proportional to eligible tasks; repository sampling is seeded round robin.
+
+Outputs, candidate diagnostics, remaining winners and full verification are under
+`data/processed/mini_swe_agent_rule_baseline_4000/`; see `data/README.md` for details.
+This changes no pilot or validation record. Training is planned for one epoch with
+action-focused supervision. The group-normalized weighted CE design is documented
+in `action_focused_sft_loss_design.md`; loss masks, trainer implementation, remote
+profiling, and training remain separate work. Rules are a quality/complexity proxy,
+not student NLL alignment.

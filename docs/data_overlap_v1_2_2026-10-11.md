@@ -40,7 +40,7 @@ Loại trùng trước khi chia dataset. Gom trajectory theo khóa repository + 
 
 ## Artifacts và giới hạn
 
-- Manifest hoạt động: `configs/datasets/nvidia_mini_swe_agent_v1_2_bugfix.json`.
+- Manifest hoạt động: `configs/datasets/nvidia_mini_swe_agent_v1_2_action_focused_sft.json`.
 - Báo cáo số đếm: `reports/data_overlap_2026-10-11_v1_2/summary.json`.
 - Loại trừ: `reports/data_overlap_2026-10-11_v1_2/training_exclusions.json`.
 - Chi tiết bảy trajectory: `reports/data_overlap_2026-10-11_v1_2/overlapping_trajectories.csv`.

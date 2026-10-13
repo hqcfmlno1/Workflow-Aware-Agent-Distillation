@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from scripts.data import prepare_cold_start as p
+from scripts.data import prepare_action_focused_sft as p
 
 
 def example():
@@ -282,3 +282,62 @@ def tokenizer():
     if not path.exists():
         pytest.skip("Official tokenizer not downloaded yet")
     return AutoTokenizer.from_pretrained(path, local_files_only=True)
+
+
+def test_split_heldout_preserves_tasks_and_is_deterministic():
+    rows = [
+        {"category": category, "task_key": f"repo/{i}#{ci}", "trajectory_id": f"{ci}-{i}"}
+        for ci, category in enumerate(p.CATEGORIES)
+        for i in range(25)
+    ]
+    phase = {
+        "seed": 42,
+        "validation_per_category": dict(zip(p.CATEGORIES, [13, 13, 12, 12], strict=True)),
+        "test_per_category": dict(zip(p.CATEGORIES, [12, 12, 13, 13], strict=True)),
+    }
+    first = p.split_heldout({"train": [], "validation": rows, "errors": []}, phase)
+    second = p.split_heldout({"train": [], "validation": rows[::-1], "errors": []}, phase)
+    assert first == second
+    assert len(first["validation"]) == len(first["test"]) == 50
+    valid = {r["task_key"] for r in first["validation"]}
+    test = {r["task_key"] for r in first["test"]}
+    assert not valid & test
+    assert valid | test == {r["task_key"] for r in rows}
+    pool = p.partition_pool(rows, dict.fromkeys(test, "test"), set(), set())
+    assert all(r["partition"] == "test" for r in pool if r["task_key"] in test)
+
+
+def test_verify_selection_rejects_test_leakage():
+    phase = {
+        "train_per_category": 1,
+        "validation_per_category": dict.fromkeys(p.CATEGORIES, 1),
+        "test_per_category": dict.fromkeys(p.CATEGORIES, 1),
+    }
+    result = {
+        split: [{"category": c, "task_key": f"{split}/{c}"} for c in p.CATEGORIES]
+        for split in ("train", "validation", "test")
+    }
+    p.verify_selection(result, set(), {"phase1": phase})
+    result["test"][0]["task_key"] = result["validation"][0]["task_key"]
+    with pytest.raises(ValueError, match="leakage"):
+        p.verify_selection(result, set(), {"phase1": phase})
+
+
+def test_keep_validation_and_release_former_test_tasks():
+    rows = [
+        {"category": category, "task_key": f"repo/{i}#{ci}"}
+        for ci, category in enumerate(p.CATEGORIES)
+        for i in range(25)
+    ]
+    old = {
+        "seed": 42,
+        "validation_per_category": dict(zip(p.CATEGORIES, [13, 13, 12, 12], strict=True)),
+        "test_per_category": dict(zip(p.CATEGORIES, [12, 12, 13, 13], strict=True)),
+    }
+    old_result = p.split_heldout({"train": [], "validation": rows}, old)
+    new = {k: v for k, v in old.items() if k != "test_per_category"}
+    new["heldout_per_category"] = 25
+    new_result = p.split_heldout({"train": [], "validation": rows}, new)
+    assert new_result["validation"] == old_result["validation"]
+    assert "test" not in new_result
+    assert p.split_names(new) == ("train", "validation")

@@ -1,6 +1,6 @@
 # Workflow-Aware-Agent-Distillation
 
-Distill student **Qwen3.5-4B** từ teacher **Qwen3.8-27B Thinking** trên **NVIDIA Open-SWE-Traces v1.2**, sử dụng **mini-SWE-agent** harness. Training dự kiến chạy QLoRA trên GPU Kaggle qua KRun; evaluation dùng OmniCode, bắt đầu với workflow bugfix.
+Distill student **Qwen3.5-4B** từ teacher **Qwen3.8-27B Thinking** trên **NVIDIA Open-SWE-Traces v1.2**, sử dụng **mini-SWE-agent** harness. Phase 1 mang tên **Action-focused SFT**, ưu tiên tool calls, Bash commands và submit trên một student đã có năng lực agent. Training dự kiến chạy trên GPU Kaggle qua KRun; lựa chọn LoRA/QLoRA cần được kiểm chứng bằng pilot. Test cuối dùng SWE-bench Verified.
 
 ## Cấu trúc
 
@@ -37,7 +37,7 @@ external/                   # Checkout OmniCode/mini-SWE-agent cục bộ, khi c
 
 ## Nguồn và chống trùng evaluation
 
-Manifest: [configs/datasets/nvidia_mini_swe_agent_v1_2_bugfix.json](configs/datasets/nvidia_mini_swe_agent_v1_2_bugfix.json).
+Manifest: [configs/datasets/nvidia_mini_swe_agent_v1_2_action_focused_sft.json](configs/datasets/nvidia_mini_swe_agent_v1_2_action_focused_sft.json).
 
 Chọn `nvidia/Open-SWE-Traces`, config `v1.2`, split `minisweagent`, teacher Qwen3.8-27B Thinking và `resolved == 1`. Phase 1 lấy 250 train + 25 validation cho mỗi category `bug-fix`, `feature-request`, `enhancement`, `other`, từ cả Scale-SWE và SWE-rebench-v2. Giữ reasoning/action/observation và serialize bằng template student chính thức. Chưa cắt context, packing hay tạo training labels.
 
@@ -48,7 +48,10 @@ Loại task trùng OmniCode trước khi chia train/validation. Gom theo reposit
 Repo có pipeline chuẩn bị NVIDIA phase 1, collector OmniCode và báo cáo overlap.
 Máy local chỉ chuẩn bị dữ liệu và lưu tokenizer; fine-tune chạy trên môi trường khác.
 Trainer QLoRA, launcher KRun và evaluation student chưa được triển khai.
-Xem [cách chạy và định nghĩa metric](docs/cold_start_phase1.md).
+Xem [cách chạy và định nghĩa metric](docs/action_focused_sft_phase1.md).
+Thiết kế [hàm loss Action-focused SFT](docs/action_focused_sft_loss_design.md) dùng
+group-normalized weighted CE; trainer và token loss masks chưa được triển khai.
+Notebook phân tích: [NVIDIA trajectories cho Action-focused SFT](notebooks/nvidia_trajectory_action_focused_sft.ipynb).
 
 1. Chuẩn bị một tập NVIDIA nhỏ, loại overlap và chia train/validation.
 2. Pilot Qwen3.5-4B QLoRA trên GPU Kaggle thực cấp; kiểm tra memory, tốc độ, reasoning serialization và resume.

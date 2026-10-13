@@ -1,4 +1,7 @@
-"""CPU-only cold-start data preparation. Never executes teacher commands or loads weights."""
+"""CPU-only Action-focused SFT data preparation.
+
+Never executes teacher commands or loads weights.
+"""
 
 from __future__ import annotations
 
@@ -163,8 +166,8 @@ def serialize(messages, tools, tokenizer):
         for ci, call in enumerate(message.get("tool_calls") or []):
             fn = call["function"]
             # Marker strings cannot occur in the source or rendered text.
-            prefix = f"__COLDSTART_{mi}_{ci}_BEGIN__"
-            suffix = f"__COLDSTART_{mi}_{ci}_END__"
+            prefix = f"__ACTION_FOCUSED_SFT_{mi}_{ci}_BEGIN__"
+            suffix = f"__ACTION_FOCUSED_SFT_{mi}_{ci}_END__"
             if prefix in text or suffix in text:
                 raise ValueError("Action marker collision")
             args = fn["arguments"]
@@ -511,22 +514,55 @@ def partition_pool(rows, assignment, selected_ids, benchmark):
     ]
 
 
+def split_names(phase):
+    return (
+        ("train", "validation", "test") if "test_per_category" in phase else ("train", "validation")
+    )
+
+
+def split_heldout(result, phase):
+    """Split the original held-out tasks without changing train selection."""
+    if not isinstance(phase["validation_per_category"], dict):
+        return result
+    output = {**result, "validation": []}
+    if "test_per_category" in phase:
+        output["test"] = []
+    rng = random.Random(phase["seed"])
+    for category in CATEGORIES:
+        rows = sorted(
+            (r for r in result["validation"] if r["category"] == category),
+            key=lambda r: r["task_key"],
+        )
+        n_valid = phase["validation_per_category"][category]
+        n_test = (
+            phase["test_per_category"][category]
+            if "test_per_category" in phase
+            else phase["heldout_per_category"] - n_valid
+        )
+        if len(rows) != n_valid + n_test:
+            raise ValueError(f"Wrong held-out quota for {category}")
+        rng.shuffle(rows)
+        output["validation"].extend(rows[:n_valid])
+        if "test" in output:
+            output["test"].extend(rows[n_valid:])
+    return output
+
+
 def verify_selection(result, benchmark, config):
     phase = config["phase1"]
     keys = {}
-    for split, quota in (
-        ("train", phase["train_per_category"]),
-        ("validation", phase["validation_per_category"]),
-    ):
+    for split in split_names(phase):
+        quota = phase[f"{split}_per_category"]
+        expected = quota if isinstance(quota, dict) else dict.fromkeys(CATEGORIES, quota)
         records = result[split]
         counts = Counter(r["category"] for r in records)
-        if counts != Counter({category: quota for category in CATEGORIES}):
+        if counts != Counter(expected):
             raise ValueError(f"Wrong quotas: {split} {counts}")
         keys[split] = {r["task_key"] for r in records}
         if len(keys[split]) != len(records) or keys[split] & benchmark:
             raise ValueError(f"Duplicate or leaked tasks: {split}")
-    if keys["train"] & keys["validation"]:
-        raise ValueError("Train/validation task leakage")
+        if any(keys[split] & previous for name, previous in keys.items() if name != split):
+            raise ValueError("Cross-split task leakage")
 
 
 def verify_hashes(directory, hashes):
@@ -556,7 +592,7 @@ def verify_outputs(config_path):
     source = Source(config, True)
     result = {
         split: [json.loads(line) for line in (out / f"{split}.jsonl").open()]
-        for split in ("train", "validation")
+        for split in split_names(config["phase1"])
     }
     verify_selection(result, benchmark, config)
     assignments = {r["task_key"]: split for split in result for r in result[split]}
@@ -670,7 +706,7 @@ def run(config_path, offline=False):
             eligible,
             lambda row: row,
             train_quota=phase["train_per_category"] + 100,
-            validation_quota=phase["validation_per_category"],
+            validation_quota=phase.get("heldout_per_category", phase["validation_per_category"]),
             seed=phase["seed"],
         )
     except QuotaError:
@@ -678,7 +714,7 @@ def run(config_path, offline=False):
             eligible,
             lambda row: row,
             train_quota=phase["train_per_category"],
-            validation_quota=phase["validation_per_category"],
+            validation_quota=phase.get("heldout_per_category", phase["validation_per_category"]),
             seed=phase["seed"],
         )
     source.plan_prefetch(planned["train"] + planned["validation"])
@@ -706,28 +742,30 @@ def run(config_path, offline=False):
 
     options = {
         "train_quota": phase["train_per_category"],
-        "validation_quota": phase["validation_per_category"],
+        "validation_quota": phase.get("heldout_per_category", phase["validation_per_category"]),
         "seed": phase["seed"],
     }
     try:
-        result = select(eligible, load, **options)
+        result = split_heldout(select(eligible, load, **options), phase)
     except QuotaError as error:
         write_jsonl(out / "errors.jsonl", error.errors)
         write_json(out / "failure.json", {"reason": str(error), "config": config})
         raise
     verify_selection(result, benchmark, config)
-    repeat = select(list(reversed(eligible)), load, **options)
-    for split in ("train", "validation"):
+    repeat = split_heldout(select(list(reversed(eligible)), load, **options), phase)
+    for split in split_names(config["phase1"]):
         if [r["trajectory_id"] for r in result[split]] != [
             r["trajectory_id"] for r in repeat[split]
         ]:
             raise ValueError("Selection is not deterministic")
-    selected = result["train"] + result["validation"]
-    assignment = {r["task_key"]: split for split in ("train", "validation") for r in result[split]}
+    selected = [r for split in split_names(phase) for r in result[split]]
+    assignment = {
+        r["task_key"]: split for split in split_names(config["phase1"]) for r in result[split]
+    }
     # ALL attempts, including unsuccessful attempts, retain the selected task's partition.
     pool = partition_pool(keyed_rows, assignment, {r["trajectory_id"] for r in selected}, benchmark)
     write_jsonl(out / "task_pool.jsonl", pool)
-    for split in ("train", "validation"):
+    for split in split_names(config["phase1"]):
         write_jsonl(out / f"{split}.jsonl", result[split])
     write_jsonl(out / "errors.jsonl", result["errors"])
     write_jsonl(
@@ -770,10 +808,11 @@ def run(config_path, offline=False):
         },
         "selection": {
             split: [{k: r.get(k) for k in provenance_fields} for r in result[split]]
-            for split in ("train", "validation")
+            for split in split_names(config["phase1"])
         },
         "phase2_rule": (
-            "Exclude ALL validation task keys regardless of attempt/category/resolved status"
+            "Exclude ALL held-out and benchmark task keys "
+            "regardless of attempt/category/resolved status"
         ),
     }
     write_json(out / "task_selection_manifest.json", manifest)
@@ -800,7 +839,7 @@ def run(config_path, offline=False):
                     )
                 ),
             }
-            for split in ("train", "validation")
+            for split in split_names(config["phase1"])
         },
         "tool_argument_checks": dict(
             Counter(c["status"] for r in selected for c in r["checks"] if c["kind"] == "arguments")
@@ -816,14 +855,101 @@ def run(config_path, offline=False):
     report["artifact_sha256"] = {
         p.name: hashlib.sha256(p.read_bytes()).hexdigest()
         for p in out.iterdir()
-        if p.is_file() and p.name != "report.json"
+        if p.is_file() and p.name not in {"report.json", "verification_report.json", "failure.json"}
     }
     write_json(out / "report.json", report)
     print(
         json.dumps(
-            {split: report["splits"][split]["trajectories"] for split in ("train", "validation")}
+            {
+                split: report["splits"][split]["trajectories"]
+                for split in split_names(config["phase1"])
+            }
         )
     )
+
+
+def split_existing_heldout(config_path):
+    """Migrate existing 100 held-out records; never regenerate or rewrite train."""
+    config = json.loads(config_path.read_text())
+    if "test_per_category" not in config["phase1"]:
+        raise ValueError(
+            "Legacy split migration requires internal test quotas; current test is external"
+        )
+    out = ROOT / config["local_paths"]["processed"]
+    manifest = json.loads((out / "task_selection_manifest.json").read_text())
+    report = json.loads((out / "report.json").read_text())
+    if "test" in manifest["selection"] or (out / "test.jsonl").exists():
+        raise ValueError("Test split already exists; refusing to repartition it")
+    verify_hashes(out, report["artifact_sha256"])
+    old_phase = manifest["config"]["phase1"]
+    expected_config = copy.deepcopy(manifest["config"])
+    expected_config["phase1"] = config["phase1"]
+    if expected_config != config:
+        raise ValueError("Migration may only change phase1 split configuration")
+    if config["phase1"]["heldout_per_category"] != old_phase["validation_per_category"]:
+        raise ValueError("Original held-out quota changed")
+    result = {
+        split: [json.loads(line) for line in (out / f"{split}.jsonl").open()]
+        for split in ("train", "validation")
+    }
+    original = {r["task_key"]: r for r in result["validation"]}
+    result = split_heldout(result, config["phase1"])
+    benchmark, _ = benchmark_keys(config, True)
+    verify_selection(result, benchmark, config)
+    repeat = split_heldout(
+        {"train": result["train"], "validation": list(reversed(list(original.values())))},
+        config["phase1"],
+    )
+    for split in ("validation", "test"):
+        if result[split] != repeat[split]:
+            raise ValueError("Held-out split is not deterministic")
+    assignment = {r["task_key"]: split for split in result for r in result[split]}
+    pool = [json.loads(line) for line in (out / "task_pool.jsonl").open()]
+    for row in pool:
+        row["partition"] = assignment.get(row["task_key"], "phase2_candidate")
+    old_selection = {r["task_key"]: r for r in manifest["selection"]["validation"]}
+    for split in ("validation", "test"):
+        records = result[split]
+        manifest["selection"][split] = [old_selection[r["task_key"]] for r in records]
+        report["splits"][split] = {
+            "trajectories": len(records),
+            "length_tokens": length_summary(records),
+            "coverage": {
+                field: dict(Counter(r[field] for r in records))
+                for field in ("category", "repo", "language", "hf_dataset_name")
+            },
+            "operation_type_first_program_heuristic": dict(
+                Counter(
+                    operation_type(call["function"]["arguments"].get("command"))
+                    for r in records
+                    for m in r["messages"]
+                    for call in m.get("tool_calls") or []
+                )
+            ),
+        }
+    manifest["config"] = config
+    manifest["config_sha256"] = digest(config_path.read_text())
+    manifest["phase2_rule"] = (
+        "Exclude ALL validation AND test task keys regardless of attempt/category/resolved status"
+    )
+    manifest["heldout_migration"] = {
+        "original_validation_task_keys": sorted(original),
+        "train_sha256_unchanged": report["artifact_sha256"]["train.jsonl"],
+        "seed": config["phase1"]["seed"],
+    }
+    # All preconditions are checked before modifying any artifacts.
+    for split in ("validation", "test"):
+        write_jsonl(out / f"{split}.jsonl", result[split])
+    write_jsonl(out / "task_pool.jsonl", pool)
+    write_json(out / "task_selection_manifest.json", manifest)
+    report["artifact_sha256"] = {
+        p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in out.iterdir()
+        if p.is_file() and p.name not in {"report.json", "verification_report.json", "failure.json"}
+    }
+    write_json(out / "report.json", report)
+    (out / "verification_report.json").unlink(missing_ok=True)
+    print(json.dumps({split: len(result[split]) for split in result}))
 
 
 def main():
@@ -831,14 +957,17 @@ def main():
     parser.add_argument(
         "--config",
         type=Path,
-        default=ROOT / "configs/datasets/nvidia_mini_swe_agent_v1_2_bugfix.json",
+        default=ROOT / "configs/datasets/nvidia_mini_swe_agent_v1_2_action_focused_sft.json",
     )
     parser.add_argument(
         "--offline", action="store_true", help="Use cached source columns and tokenizer only"
     )
     parser.add_argument("--verify", action="store_true", help="Verify completed outputs offline")
+    parser.add_argument("--split-existing-heldout", action="store_true")
     args = parser.parse_args()
-    if args.verify:
+    if args.split_existing_heldout:
+        split_existing_heldout(args.config)
+    elif args.verify:
         verify_outputs(args.config)
     else:
         run(args.config, offline=args.offline)
