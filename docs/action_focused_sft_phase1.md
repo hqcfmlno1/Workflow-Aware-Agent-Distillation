@@ -1,14 +1,17 @@
 # Action-focused SFT — Phase 1
 
-Phase 1 tinh chỉnh một student đã có năng lực agent, ưu tiên tool calls, Bash commands
-và hành vi submit từ teacher trajectories. Tên Action-focused SFT mô tả mục tiêu này.
-Thiết kế loss nằm trong [tài liệu hàm loss](action_focused_sft_loss_design.md).
+Phase 1 adapts an already capable student using teacher reasoning, tool calls,
+Bash commands, and terminal submission. Conditional action supervision targets
+both command syntax and action selection given the preceding teacher history.
+The [loss design](action_focused_sft_loss_design.md) specifies SmartAD-style
+weighted-token CE with reasoning/content/action/submit weights **1 / 0.75 / 1.5 / 2**.
 
-Máy local chỉ chuẩn bị dữ liệu trên CPU và lưu tokenizer/chat template; fine-tune chạy
-ở môi trường khác (dự kiến Kaggle). Pipeline không tải weights, khởi tạo model, dùng GPU,
-train/evaluate student hoặc thực thi command teacher. Collector SWE-agent cũ giữ nguyên.
+The local machine prepares data on CPU and stores the tokenizer/chat template;
+fine-tuning runs remotely, provisionally on Kaggle. The preparation pipeline does
+not load model weights, initialize a model, use GPUs, train/evaluate the student,
+or execute teacher commands. The older SWE-agent collector remains unchanged.
 
-## Chạy
+## Run the pilot pipeline
 
 ```bash
 uv sync --extra data
@@ -17,126 +20,153 @@ uv run python scripts/data/prepare_action_focused_sft.py --offline
 uv run python scripts/data/prepare_action_focused_sft.py --verify
 ```
 
-Extra `data` chứa transformers/tokenizers, Jinja2, jsonschema; không cần extra `train`.
-Offline cần cache đầy đủ. Output đã có `report.json` không bị ghi đè; đổi
-`local_paths.processed` trong config để chạy mới. Lần chưa hoàn tất dùng tiếp cache được.
+The `data` extra provides Transformers/tokenizers, Jinja2, and jsonschema; the
+`train` extra is unnecessary. Offline mode requires complete caches. Outputs with
+an existing `report.json` are not overwritten; change `local_paths.processed` in
+the configuration for a new build. An incomplete run can reuse its cache.
 
-Manifest `nvidia_mini_swe_agent_v1_2_action_focused_sft.json` có selection `phase1` riêng:
-250 train + 25 held-out cho mỗi category bug-fix, feature-request, enhancement, other.
-Giữ 50 validation theo seed 42, có lần lượt 13/13/12/12 mẫu theo thứ tự category trên.
-50 task còn lại từ reserve cũ được trả về training pool. Train pilot 1.000 giữ nguyên.
-Không có test nội bộ; test cuối dùng 500 task SWE-bench Verified theo config.
-Teacher Qwen3.8-27B Thinking, resolved=1, revision NVIDIA đã audit, đủ 44 shard.
-Sắp xếp trước khi shuffle repository/task/attempt bằng seed 42; luân phiên repository,
-held-out trước, một trajectory mỗi task. Sau đó sort task key và shuffle theo seed 42
-trong từng category để chọn validation; phần còn lại trở về pool. Thiếu quota thì dừng, không đổi phân bố.
+The `nvidia_mini_swe_agent_v1_2_action_focused_sft.json` manifest has a separate
+`phase1` selection: 250 train and 25 originally reserved tasks per category
+(`bug-fix`, `feature-request`, `enhancement`, `other`). The current validation set
+retains 50 tasks using seed 42, with category counts 13/13/12/12 in that order.
+The other 50 reserved tasks were returned to the training pool. The 1,000-task
+pilot training set is unchanged. There is no internal test split; the configured
+final benchmark is SWE-bench Verified's 500 tasks.
 
-Đọc đủ 494 base + 415 style OmniCode, checksum sáu file phải khớp audit. Khóa task là
-repo viết thường + số PR; style dùng original_instance_id/pull_number để tránh nhầm số
-biến thể. Không khẳng định phát hiện các PR khác nhau giải cùng issue.
+Selection uses Qwen3.8-27B Thinking, `resolved=1`, the audited NVIDIA revision, and
+all 44 source shards. Sort repositories/tasks/attempts before seeded shuffling;
+sample repositories round robin, reserve held-out tasks first, and select one
+trajectory per task. Sort and shuffle reserved task keys within each category
+with seed 42 to retain validation and release the remainder. A quota shortage
+stops the build instead of changing the distribution.
 
-## Artifacts
+Read all 494 base and 415 style OmniCode instances; six source-file checksums must
+match the audit. Canonical task keys use lowercase repository and PR number.
+Style variants use `original_instance_id`/`pull_number` to avoid confusing variant
+numbers with PRs. This does not detect different PRs addressing the same issue.
 
-Trong `data/processed/mini_swe_agent_v1_2_phase1/` (Git bỏ qua):
+## Pilot artifacts
 
-| File | Nội dung |
+Files under `data/processed/mini_swe_agent_v1_2_phase1/` are ignored by Git:
+
+| File | Contents |
 | --- | --- |
-| train.jsonl, validation.jsonl | Normalized messages/tools, text, token count, checks, provenance, action candidates |
+| train.jsonl, validation.jsonl | Normalized messages/tools, text, token counts, checks, provenance, action candidates |
 | task_selection_manifest.json | Config/seed, task IDs, benchmark hashes, tokenizer commit/template/file hashes |
-| excluded.jsonl | Loại trước sampling và lý do |
-| errors.jsonl | Ứng viên không thể normalize/serialize, thay trong cùng category |
-| checks.jsonl | Call sai schema và trường hợp chưa xác minh |
-| task_pool.jsonl | Mọi attempts không trùng benchmark; cùng task giữ cùng partition |
-| report.json | Coverage category/repo/source/ngôn ngữ/thao tác, độ dài, checks, artifact hashes |
-| verification_report.json | Kiểm chứng offline với source, template, token count, spans và partition pool |
-| failure.json | Lý do thiếu quota nếu có |
+| excluded.jsonl | Pre-sampling exclusions and reasons |
+| errors.jsonl | Failed normalization/serialization candidates, replaced within category |
+| checks.jsonl | Schema-invalid calls and unverified cases |
+| task_pool.jsonl | All benchmark-disjoint attempts, grouped by task partition |
+| report.json | Category/repository/source/language/operation coverage, lengths, checks, artifact hashes |
+| verification_report.json | Offline source/template/token/span and pool-partition checks |
+| failure.json | Quota-shortage details, if any |
 
-Phase 2 phải loại mọi task có partition=validation, kể cả attempts chưa chọn hoặc
-unsuccessful/khác category. Pool chưa phải train: cần lọc teacher/category/resolved và
-kiểm tra hội thoại khi sử dụng.
+Every subsequent phase and dataset extension must exclude all tasks with
+`partition=validation`, including unselected, unsuccessful, or differently
+categorized attempts. Pool membership alone is not training eligibility: filter
+teacher/category/resolution and validate conversations before use.
 
-Chỉ đọc provenance và metadata category/teacher, không đọc reference/model patches
-NVIDIA. Giữ content, reasoning, mọi tool calls và observations; decode một lớp JSON cho
-tools và arguments, không unescape command thêm. Cache giữ source messages. Normalized
-giữ reasoning ngay cả khi template bỏ lịch sử reasoning. Template Qwen3.5-4B chính thức
-dùng add_generation_prompt=False; không truncate, packing hoặc tạo labels.
+Read provenance and category/teacher metadata, without reading NVIDIA reference
+or model patches. Preserve content, reasoning, all tool calls, and observations.
+Decode the tools and arguments JSON layers once without additional command
+unescaping. Caches retain source messages. Normalized records retain reasoning
+even if the template omits it from history. The official Qwen3.5-4B template uses
+`add_generation_prompt=False`; preparation adds no truncation, packing, or labels.
 
-Call parse được nhưng sai schema được giữ với check invalid: teacher có thể gọi sai
-rồi sửa. JSON không normalize được hoặc trình tự observation sai sẽ loại trajectory.
-Observation thiếu ID chỉ đối chiếu vị trí và ghi unverified. Cho phép terminal submit
-cuối không có observation. Không suy ra command hợp lệ từ resolved=1.
+Parseable but schema-invalid calls are retained with an invalid check because
+teachers can make mistakes before recovering. Unnormalizable JSON or invalid
+observation ordering rejects a trajectory. Observations without IDs receive only
+positional matching and an unverified status. Terminal submission without a final
+observation is allowed. `resolved=1` does not establish command validity.
 
-Action candidates là chỉ số ký tự Python [start,end) trong text và message/call index.
-Marker render phân biệt call thật với tag trong reasoning/content/observation; bỏ marker
-phải khớp tuyệt đối render chính thức. Đối số cuối không phải string có span null và
-trạng thái chưa xác minh. Candidates chưa phải labels hay bằng chứng command chạy được.
+Action candidates contain Python character offsets `[start,end)` in rendered text
+and message/call indices. Marker rendering distinguishes actual calls from tags
+inside reasoning, content, and observations. Removing markers must reproduce the
+official render exactly. A non-string final argument has a null span and an
+unverified status. Candidates are not token labels or evidence of executability.
 
-## Metric so base student với LoRA sau này
+## Student protocol diagnostics
 
-Đo trên output student với cùng harness, prompt, tool schema, image/dependency state,
-task split, generation config và budget. Ghi revision model/adapter/parser và image digest.
-Lần chuẩn bị dữ liệu chưa đo các metric này.
+Compare base and adapter outputs under the same harness, prompt, tool schema,
+image/dependency state, task split, generation settings, and budget. Record model,
+adapter, parser revisions, and image digests. These metrics have not been measured
+by the preparation pipeline and are secondary to task success for the first run.
 
-**Tool-call validity:** output qua parser harness theo protocol Qwen, mọi call đúng tên
-tool và JSON schema ngay lần đầu, không retry/sửa JSON/fallback. Mẫu số: mọi lần sinh
-được yêu cầu action; không parse được hoặc thiếu call là invalid. Báo cáo cả tỷ lệ theo
-call và theo lượt (multi-call chỉ đạt khi tất cả calls hợp lệ). Final response hợp lệ
-theo harness báo cáo riêng, không tùy ý thêm vào mẫu số action.
+**Tool-call validity:** output must pass the Qwen harness parser, tool-name checks,
+and JSON schema on the first attempt, without retry, JSON repair, or fallback.
+The denominator includes all generations requested to produce an action; missing
+or unparseable calls are invalid. Report call-level and turn-level rates, with a
+multi-call turn passing only when every call is valid. Report legitimate harness
+final responses separately rather than adding them to the action denominator.
 
-**Command availability:** trong Bash calls hợp lệ, từng chương trình/builtin được gọi
-phải được xác nhận tồn tại trong environment harness ở đúng shell/PATH/cwd/task/setup
-state tại thời điểm đó. Không dùng PATH máy local hay resolved=1 để suy ra availability.
-Command ghép cần kiểm tra từng invocation; một invocation xác nhận thiếu khiến call
-unavailable. Ba trạng thái: verified_available, verified_unavailable, unverified.
-Báo cáo cả ba số lượng trên tổng calls hợp lệ, tỷ lệ available trên phần đã xác minh
-và coverage xác minh để tránh bỏ trường hợp khó làm đẹp tỷ lệ.
+**Command availability:** each program or builtin in valid Bash calls must be
+confirmed in the matching harness shell/PATH/cwd/task/setup state at that moment.
+Do not infer availability from the local machine's PATH or `resolved=1`. Compound
+commands require checking each invocation; one confirmed missing invocation makes
+the call unavailable. Report `verified_available`, `verified_unavailable`, and
+`unverified` counts, availability among verified calls, and verification coverage.
 
-Command động, substitutions, scripts chưa có nội dung, PATH thay đổi hoặc dependencies/
-environment chưa có là unverified. Availability không đồng nghĩa exit code 0 hoặc giải
-đúng task. Phân loại thao tác trong report chỉ là heuristic chương trình đầu tiên,
-không phải metric availability. Dataset qua kiểm tra chưa chứng minh LoRA đạt mục tiêu.
+Dynamic commands, substitutions, unseen scripts, changing PATH, and unavailable
+dependency/environment state remain unverified. Availability does not imply a zero
+exit code or task correctness. Reported operation classes are first-program
+heuristics, not availability measurements. Dataset verification does not establish
+student performance.
 
-## Test cuối và dữ liệu lịch sử
+## Evaluation policy and historical data
 
-Test cuối là 500 task `princeton-nlp/SWE-bench_Verified`, revision
-`c104f840cc67f8b6eec6f759ebc8b2693d585d4a`. Config `test_evaluation` ghi dataset,
-revision, split và audit. Không dùng test để chọn checkpoint hoặc hyperparameter.
-Audit `reports/swebench_verified_overlap_2026-10-12/` xác nhận không trùng repository
-+ PR với 107.267 trajectories nguồn; chưa kiểm semantic duplicates hoặc issue chung.
+The first experiment uses fixed weights and trains the selected 4,000 trajectories
+for one epoch, then evaluates the final checkpoint on all 500 tasks of
+`princeton-nlp/SWE-bench_Verified`, revision
+`c104f840cc67f8b6eec6f759ebc8b2693d585d4a`. Teacher-trajectory validation CE is an
+optional diagnostic, not the checkpoint-selection criterion. Compare base and
+adapter with matched evaluation conditions and report resolved rate and resource
+use. Save full training checkpoints for reliable resume. No dataset expansion or
+second epoch is currently planned.
 
-Validation hiện tại giữ nguyên 50 task đã chọn. Mọi attempts của 50 task từng thuộc
-test nội bộ đã trở về pool. `test.jsonl` cũ, manifest/report và success export cũ được
-lưu trong `data/interim/archive_internal_test_2026-10-12/`, ngoài các đường dẫn đang dùng.
-Train/validation processed vẫn là trajectory đầy đủ, chưa tạo next-action examples
-hoặc labels. Export success hiện hành đánh dấu `train_pool`, `validation` và
-`excluded_omnicode`. Chuẩn bị train toàn bộ success pool là bước riêng, chưa thực hiện.
+The `test_evaluation` configuration records the dataset, revision, split, and
+audit. Keep the first test independent of weight/checkpoint selection. Repeated
+benchmark-driven tuning makes Verified a development benchmark and must be
+reported accordingly or followed by a separate untouched test.
+
+The audit in `reports/swebench_verified_overlap_2026-10-12/` found no canonical
+repository-plus-PR overlap with 107,267 source trajectories. It does not establish
+absence of semantic duplicates or shared issues.
+
+The existing 50 validation tasks remain held out. All attempts from the former
+50-task internal test were returned to the pool. Historical `test.jsonl`,
+manifest/report, and success exports are archived under
+`data/interim/archive_internal_test_2026-10-12/`, outside active paths. Processed
+pilot records are complete trajectories; next-action examples and labels have not
+been built. Active success exports use `train_pool`, `validation`, and
+`excluded_omnicode` partitions.
 
 ## Full-corpus template conversion
 
 The separate CPU-only `scripts/data/convert_success_trajectories.py` pipeline
 renders every success-export row using the same pinned official Qwen3.5-4B
-tokenizer as the pilot. Its sharded gzip JSONL outputs are under
+tokenizer as the pilot. Sharded gzip JSONL outputs are under
 `data/processed/nvidia_mini_swe_agent_v1_2_success_qwen35_4b/`. It preserves task
-partitions and all attempts, and does not change the 1,000+50 pilot selection.
-Normalization failures remain as explicit error records with original payloads;
+partitions and all attempts without changing the 1,000+50 pilot selection.
+Normalization failures remain explicit error records with original payloads;
 there is no silent replacement or dropping. Loss masks and SFT training labels
-remain a subsequent trainer-specific step. See `data/README.md` for build, replay
-verification, and streaming-read commands.
+remain a trainer-specific step. See [data instructions](../data/README.md) for
+build, replay verification, and streaming-read commands.
 
-## Rule-selected SFT baseline (2026-10-13)
+## Rule-selected SFT baseline
 
-The current baseline selection is 4,000 distinct train-pool tasks with multiple
-successful attempts, selecting one original Qwen-rendered trajectory per task.
+The current baseline selects 4,000 distinct train-pool tasks with multiple
+successful attempts, keeping one original Qwen-rendered trajectory per task.
 `scripts/data/select_rule_trajectories.py` ranks candidates lexicographically by
 confirmed historical shell usage errors, consecutive duplicate action/observation
 blocks, serialized token count, tool-call count, and trajectory ID. It excludes
-schema-invalid calls and keeps held-out tasks out of all sampling. Category quotas
+schema-invalid calls and keeps held-out tasks out of sampling. Category quotas
 are proportional to eligible tasks; repository sampling is seeded round robin.
 
-Outputs, candidate diagnostics, remaining winners and full verification are under
-`data/processed/mini_swe_agent_rule_baseline_4000/`; see `data/README.md` for details.
-This changes no pilot or validation record. Training is planned for one epoch with
-action-focused supervision. The group-normalized weighted CE design is documented
-in `action_focused_sft_loss_design.md`; loss masks, trainer implementation, remote
+Outputs, diagnostics, remaining winners, and verification are under
+`data/processed/mini_swe_agent_rule_baseline_4000/`; see
+[data instructions](../data/README.md) for details. No pilot or validation record
+is changed. The [loss design](action_focused_sft_loss_design.md) specifies
+weighted-token CE, masking, per-trajectory reduction, the one-epoch evaluation
+policy, and checkpointing requirements. Loss masks, trainer implementation, remote
 profiling, and training remain separate work. Rules are a quality/complexity proxy,
 not student NLL alignment.

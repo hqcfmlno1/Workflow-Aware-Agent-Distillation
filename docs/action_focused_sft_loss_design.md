@@ -1,219 +1,159 @@
-# Action-focused SFT — Thiết kế hàm loss Phase 1
+# Action-focused SFT — Phase 1 loss design
 
-**Qwen3.5-4B · mini-SWE-agent · baseline 4.000 trajectory**
-Ngày: 13/10/2026 · Phiên bản thiết kế: 1.0
+**Qwen3.5-4B · mini-SWE-agent · 4,000-trajectory baseline**
 
-## 1. Mục tiêu và quyết định thiết kế
+Updated: 2026-10-15 · Design version: 2.0
 
-Phase 1 tinh chỉnh một student đã có năng lực agent, ưu tiên giúp student tuân thủ protocol mini-SWE-agent, sinh tool calls đúng cấu trúc, sử dụng Bash và kết thúc task đúng cách. Giữ reasoning và lời giải thích của teacher trong hội thoại, đồng thời giảm mức ưu tiên của chúng trong objective. Không xóa reasoning để biến dữ liệu thinking thành non-thinking.
+## 1. Objective and scope
 
-Thiết kế sử dụng **cross-entropy với nhãn cứng của teacher**, chuẩn hóa riêng theo bốn nhóm token: reasoning, content, action và submit. Đây là SFT lấy cảm hứng từ segment-weighted supervision của SmartAD; không phải KL distillation vì không có phân phối logits của teacher.
+Phase 1 adapts an already capable agent through conditional imitation of teacher reasoning, commands, and terminal submission. Tool-call supervision teaches syntax, command and argument selection, and their use given the preceding teacher history. A useful published SWE-bench score motivates this broader goal; it does not establish a syntax-validity rate for our exact configuration.
 
-Các quyết định của baseline:
+The baseline uses **SmartAD-style weighted-token cross-entropy** with hard teacher targets. Starting reasoning/content/action/submit weights are **1.0 / 0.75 / 1.5 / 2.0**. Reasoning remains in both input and targets wherever the official template renders it. System messages, user messages, observations, padding, and supplied assistant prefixes are context only.
 
-- System, user, tool observations và prefix do harness cung cấp: chỉ làm context, không tính loss.
-- Reasoning/content do assistant sinh: có loss, với hệ số thấp.
-- Tool calls thông thường và các delimiter cần thiết do model sinh: có loss cao.
-- Tool call submit kết thúc trajectory: một nhóm riêng, không tính lại trong action.
-- Chuẩn hóa loss theo số token trong từng nhóm, sau đó trung bình theo trajectory/task.
-- Hệ số khởi đầu: reasoning 0,10; content 0,05; action 1,00; submit 0,25.
+These weights are initial hypotheses, not empirically optimal SWE values. No teacher logits are required. The objective applies to LoRA or QLoRA, while numerical stability and memory require remote profiling. The local machine prepares data and stores assets; training runs remotely.
 
-Các hệ số là lựa chọn thiết kế cần kiểm chứng trên validation, không phải kết quả thực nghiệm hoặc giá trị tối ưu đã được xác nhận. Công thức không phụ thuộc việc base weights được lưu theo LoRA 16-bit hay QLoRA 4-bit.
+## 2. Relation to SmartAD
 
-Giữ target reasoning với loss khác 0 giúp tiếp tục supervise cách sinh reasoning, nhưng không bảo đảm năng lực thinking được giữ nguyên. Training và validation phải ghi rõ thinking mode/prefix đang dùng; không đổi sang non-thinking trong khi gọi đây là cùng một baseline.
+SmartAD Section 3.3 uses reason/action/final token weights **1 / 1.5 / 2** and normalizes the weighted CE sum by the sum of token weights. This design adopts that token weighting and normalization, adds content with weight 0.75, and maps final to the terminal submission call. The equal-trajectory reduction below is an explicit baseline choice. Report these adaptations rather than claiming an exact replication.
 
-## 2. “Final decision” được định nghĩa như thế nào?
+Within a trajectory, an action token receives 1.5 times the coefficient of a reasoning token; a submit token receives twice that coefficient. Content has a modestly lower coefficient. Group contributions depend on token counts and CE values. Longer reasoning can contribute more to the objective. Coefficients do not specify fixed group percentages, gradient shares, memory use, or runtime.
 
-SmartAD dùng block hành động cuối tạo đáp án làm vùng final. Trong mini-SWE-agent, bản sửa được tạo dần qua các action sửa code; action submit chỉ chọn thời điểm kết thúc và chuyển kết quả cho harness. Vì vậy, tài liệu này dùng tên **submit/termination**, thay vì coi submit tương đương hoàn toàn với đáp án cuối của bài QA/math.
+Reasoning targets also discourage switching to tools where the teacher continues reasoning. This supervision remains substantial. It is an implicit teacher-forced signal, not a direct penalty on generated rollouts or a guarantee of correct timing. Shorter reasoning than the teacher is not necessarily wrong. Nonzero reasoning loss does not guarantee preserved thinking capabilities.
 
-Trong cấu hình SWE-bench của mini-SWE-agent v2.4.6, user prompt yêu cầu:
+Rule-based selection is a quality/complexity proxy. It does not implement SmartAD's student-NLL selection or establish capability alignment.
+
+## 3. Token groups and masks
+
+Every supervised assistant target belongs to exactly one group.
+
+| Group | Target region | Weight per token |
+| --- | --- | ---: |
+| R — Reasoning | Assistant reasoning actually rendered by the template | 1.0 |
+| C — Content | Assistant prose outside reasoning/tool calls, including summaries | 0.75 |
+| A — Action | Ordinary tool calls and model-generated action protocol delimiters | 1.5 |
+| F — Terminal submission | The final tool call that terminates and submits the trajectory | 2.0 |
+| Context/padding | System, user, tool schemas/observations, padding, supplied assistant prefixes | Masked: `labels = -100` |
+
+A and F include the complete tool-call wrapper, function name, arguments, command, and code written through the command. Code or patches in observations remain context. Reference patches must not be added as input or new targets. Reasoning and prose in the final assistant message retain R and C weights.
+
+Partitioning rules:
+
+1. Use source roles, structured fields, and verified render positions. Do not assign labels by scanning all text for submit strings or code fences: these also occur in prompts, reasoning, and observations.
+2. Assign F only to the actual terminal submission call. Earlier failed submit attempts remain A. Classify each call separately in multi-call messages.
+3. Permit terminal submission without a final observation, as in the audited data. Do not fabricate observations or patch targets.
+4. Preserve multiline commands, Unicode, quotes, and escapes. Decode the intended JSON layers once; do not rewrite commands to simplify training.
+5. Mask assistant prefixes already supplied at inference. Model-generated phase-transition delimiters such as `</think>` belong to A. Tool-call delimiters inherit A or F from their call. The message-ending delimiter after submission is F; after ordinary actions it is A. For messages without calls, reasoning delimiters inherit R and content-only message endings inherit C. Version the exact mapping against the inference prefix and official template.
+6. Whitespace follows its rendered region. Reject ambiguous or unassigned assistant target boundaries rather than silently assigning an action label.
+
+Equal coefficients do not imply equal loss or gradient contributions. Already predictable syntax can contribute less signal than uncertain command arguments. Long edit payloads still contain many targets and may dominate other actions. The objective does not equalize action steps or distinguish useful from redundant actions inside successful trajectories.
+
+## 4. Terminal submission and patch protocol
+
+The initial prompt in mini-SWE-agent v2.4.6's SWE-bench configuration asks the agent to create and inspect `patch.txt`, then submit with:
 
 ```bash
 echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt
 ```
 
-Harness dựng prompt từ `instance_template` ngay đầu mỗi task. Docker environment nhận submit khi dòng đầu output là tín hiệu trên và return code bằng 0, rồi lấy phần output còn lại làm submission. Harness không tự xác định patch đã giải đúng bài và không ép student submit tại một thời điểm do harness chọn.
+The Docker environment detects the marker on the first output line when the command return code is zero and takes remaining output as the submission. The student chooses when to submit. Protocol acceptance does not establish patch correctness.
 
-Audit ngày 13/10/2026 trên 49.925 trajectory thành công đã tải xác nhận: tất cả có hướng dẫn submit trong prompt ban đầu, tất cả kết thúc bằng một Bash tool call phát tín hiệu submit, với 23 biến thể command. Trong đó 35.586 dùng nguyên văn command; 11.828 thêm `cd /testbed &&`; 2.473 dùng đường dẫn `/testbed/patch.txt`; 38 dùng biến thể khác.
+Ordinary `mini.yaml` instead requests the marker-only command without another command. SWE-bench Verified requires a patch prediction for evaluation, but does not universally require a file named `patch.txt`; collection depends on the harness configuration.
 
-Không nâng trọng số của toàn bộ assistant message cuối. Reasoning và bản tóm tắt dài trong message đó vẫn thuộc các nhóm reasoning/content. Việc nộp thành công về protocol không chứng minh patch đúng; `resolved == 1` là kết quả được ghi bởi nguồn dataset.
+Retain `cat patch.txt` in this baseline's terminal targets with weight 2.0, using the corresponding patch-output protocol for evaluation. This can teach a protocol-specific habit; it does not establish generalization to prompts without patch-file requirements. Masking only `cat` would also leave earlier patch-creation actions supervised.
 
-<!-- pagebreak -->
+The 2026-10-13 audit of 49,925 successful trajectories found submit instructions in every initial prompt and one final Bash submission call per trajectory. Its 23 command variants comprise 35,586 exact commands, 11,828 with a `cd /testbed &&` prefix, 2,473 using `/testbed/patch.txt`, and 38 others. Preserve these commands. SmartAD's final block and this terminal handoff have different semantics; weight 2.0 remains a starting experiment.
 
-## 3. Phân vùng token và tạo supervision
+## 5. Official template and token boundaries
 
-Gọi G = {R, C, A, F}, lần lượt là reasoning, content, action và final submit. Mỗi token được supervise thuộc đúng một nhóm; token context không thuộc G.
+Use `Qwen/Qwen3.5-4B` tokenizer revision `851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a`, with chat-template SHA256 `a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715`. Existing records use `add_generation_prompt=False`.
 
-| Nhóm | Phạm vi | Hệ số λ | Quy tắc |
-| --- | --- | --- | --- |
-| Context | System, đề bài, tools schema, observations, assistant prefix đã cung cấp | 0 | `labels = -100`; vẫn giữ trong input |
-| R — Reasoning | Nội dung suy luận assistant được template thực sự serialize | 0,10 | Không tự lấy lời giải thích trong observation làm reasoning |
-| C — Content | Lời nói assistant ngoài reasoning và ngoài tool calls | 0,05 | Bao gồm bản tóm tắt trước submit |
-| A — Action | Các tool calls không phải terminal submit; protocol delimiters do model phải sinh | 1,00 | Gồm tên function, tham số, toàn bộ command và nội dung code sửa file |
-| F — Submit | Tool call thực hiện submit cuối cùng của trajectory | 0,25 | Gồm wrapper, tên function, tham số và command; loại khỏi A |
+The pinned template renders assistant reasoning after the last user query; reasoning before a newer user query can be omitted. Do not assume only the final response has reasoning or every normalized `reasoning_content` field has rendered tokens. Report omitted reasoning. Exposing it through changed sample construction requires a versioned representation.
 
-**Cấu trúc tool call của student.** Dữ liệu normalized có `tool_calls[].function.name` và `function.arguments`; template chính thức Qwen3.5 serialize thành cấu trúc dạng sau. Đây là minh họa, không phải template tự viết thay thế tokenizer:
+Tokenize complete rendered text with the official tokenizer. Convert verified character spans using offset mappings and explicit special-token handling. Separately tokenizing and concatenating regions can change token IDs. Resolve ambiguous cross-region tokens and unmatched offsets before training. Existing `action_candidates` are character spans, not completed token labels.
 
-```text
-<tool_call>
-<function=bash>
-<parameter=command>
-echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat patch.txt
-</parameter>
-</function>
-</tool_call>
-```
+## 6. Loss formula and reduction
 
-**Quy tắc phân vùng bắt buộc:**
-
-1. Dùng role, các trường structured và vị trí render đã đối chiếu để xác định vùng. Không tìm marker submit hay code fence trên toàn bộ text rồi gán loss; marker xuất hiện cả trong prompt và reasoning.
-2. F chỉ áp dụng cho tool call submit cuối thực sự kết thúc trajectory. Một attempt submit trước đó thất bại vẫn là action A; không gán mọi command chứa marker thành F.
-3. Nếu message có nhiều calls, phân loại từng call. Một call F không biến các calls khác hay toàn bộ message thành F.
-4. Trường hợp kết thúc không có observation cuối được cho phép theo dữ liệu đã audit. Không tạo observation hoặc đáp án patch mới để bù vào.
-5. Giữ command nhiều dòng, Unicode, quotes và escapes theo dữ liệu normalized. Parse đúng một lần ở mỗi lớp JSON; không sửa command để làm nó dễ học hơn.
-6. Prefix assistant mà inference đã cung cấp phải mask. Delimiter chuyển pha do model phải sinh, như `</think>` và delimiter ngoài tool calls, thuộc A. Delimiter kết thúc message sau submit thuộc F; nếu sau action thường thì thuộc A. Không supervise một token kết thúc vốn đã nằm trong input prefix.
-7. Token newline/whitespace thuộc vùng render chứa nó. Delimiter bên trong tool-call wrapper kế thừa A hoặc F của call đó. Mọi token assistant còn lại phải có nhãn xác định, không rơi vào nhóm mặc định âm thầm.
-
-Patch xuất hiện trong tool observation chỉ là context. Code được assistant viết trong command EDIT là target A. Không đưa reference patch vào input hoặc vào target mới.
-
-## 4. Template, reasoning và ranh giới token
-
-Dùng tokenizer `Qwen/Qwen3.5-4B`, revision `851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a`; checksum chat template `a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715`. Dữ liệu hiện tại render với `add_generation_prompt=False`.
-
-Template đã lưu có điều kiện theo user query cuối: reasoning của assistant sau query đó được render; reasoning ở phần lịch sử trước query mới có thể bị bỏ. Không mặc định reasoning chỉ tồn tại ở response cuối, cũng không mặc định mọi `reasoning_content` normalized đều có token tương ứng trong text.
-
-Chỉ tính loss trên token thực sự đi vào model. Khi triển khai phải báo cáo reasoning có trong normalized nhưng không được render. Nếu thay đổi cách dựng sample để supervise lại reasoning bị bỏ, đó là thay đổi representation cần version và kiểm chứng riêng; không âm thầm sửa template.
-
-Tokenize toàn bộ text bằng tokenizer chính thức; không tokenize từng vùng rồi nối vì kết quả có thể khác. Chuyển character spans thành token spans bằng offset mappings và xử lý riêng special tokens. Ranh giới không rõ, token cắt qua hai vùng hoặc không đối chiếu được phải được ghi lỗi và xử lý trước training; không tự gán thành action. Các `action_candidates` hiện có mới là character spans ứng viên, chưa phải token labels hoàn chỉnh.
-
-<!-- pagebreak -->
-
-## 5. Công thức loss chính thức của baseline
-
-Với trajectory n, gọi yₙ,ᵢ là token target ở vị trí i; hₙ,<ᵢ là toàn bộ context đứng trước nó. Cross-entropy ở token đó:
+For target token i in trajectory n, teacher-forced CE is:
 
 $$\ell_{n,i}(\theta)=-\log p_\theta(y_{n,i}\mid h_{n,<i}).$$
 
-Gọi Iₙ,ᵍ là tập vị trí target thuộc nhóm g; Nₙ,ᵍ = |Iₙ,ᵍ|. Tính mean loss riêng cho mỗi nhóm không rỗng:
+Let I(n,g) contain supervised positions in group g, with count N(n,g). Its CE sum is:
 
-$$\bar L_{n,g}=\frac{1}{N_{n,g}}\sum_{i\in I_{n,g}}\ell_{n,i},\qquad N_{n,g}>0.$$
+$$S_{n,g}=\sum_{i\in I(n,g)}\ell_{n,i}.$$
 
-Gọi Gₙ là các nhóm có Nₙ,ᵍ > 0. Loss của trajectory:
+The weighted target count and trajectory loss are:
 
-$$L_n=\frac{\sum_{g\in G_n}\lambda_g\bar L_{n,g}}{\sum_{g\in G_n}\lambda_g}.$$
+$$D_n=N_{n,R}+0.75N_{n,C}+1.5N_{n,A}+2N_{n,F},$$
 
-Loss của một tập/batch chứa B trajectory, mỗi trajectory có trọng số ngang nhau:
+$$L_n=\frac{S_{n,R}+0.75S_{n,C}+1.5S_{n,A}+2S_{n,F}}{D_n}.$$
 
-$$L_{\mathrm{phase1}}=\frac{1}{B}\sum_{n=1}^{B}L_n.$$
+For B trajectories, retain equal trajectory weighting:
 
-Với đầy đủ bốn nhóm, công thức cụ thể là:
+$$L_{\mathrm{batch}}=\frac{1}{B}\sum_{n=1}^{B}L_n.$$
 
-$$L_n=\frac{0.10\bar L_{n,R}+0.05\bar L_{n,C}+1.00\bar L_{n,A}+0.25\bar L_{n,F}}{1.40}.$$
+Accumulate CE sums, multiply by token weights, and normalize by weighted target counts within each trajectory. Empty groups contribute zero to numerator and denominator. Reject trajectories without supervised targets. Missing A or F is a data error for this corpus; absent R must be checked against source reasoning and template behavior.
 
-Nếu một nhóm rỗng, bỏ cả tử và hệ số của nhóm đó khỏi mẫu số; không chia cho 0 và không tự thêm target. Trajectory không có A hoặc F trong baseline hiện tại phải bị báo lỗi dữ liệu thay vì âm thầm tiếp tục. Nhóm R rỗng cần được đối chiếu với reasoning normalized và điều kiện của template trước khi chấp nhận.
+Scaling all four coefficients by the same positive constant leaves loss unchanged. Changing one coefficient changes its contribution and the normalizer. Weighted totals from different coefficient configurations are not a common model-quality metric.
 
-### 5.1. Ý nghĩa của hệ số
+### 6.1. Windows, accumulation, and DDP
 
-| Nhóm | Tỷ lệ hệ số trong objective khi đủ bốn nhóm |
-| --- | --- |
-| Reasoning | 7,14% |
-| Content | 3,57% |
-| Action | 71,43% |
-| Submit | 17,86% |
+The formula defines the objective over complete represented trajectories. If trajectory n is split into chunks s, supervise each target once and mask repeated history. Keep the full-trajectory denominator D(n):
 
-Đây là tỷ lệ hệ số của các mean losses, **không phải tỷ lệ gradient thực tế, tỷ lệ VRAM hoặc tỷ lệ thời gian train**. Gradient còn phụ thuộc độ khó và giá trị loss của từng token.
+$$q_{n,s}=\frac{\sum_{i\in I(n,s)}w_{n,i}\ell_{n,i}}{D_n},\qquad L_n=\sum_s q_{n,s}.$$
 
-Reasoning dài không tự nhận thêm tỷ trọng chỉ vì có nhiều token. Submit có hệ số nhỏ hơn tổng action nhưng lớn hơn reasoning/content. Vì submit thường rất ngắn, hệ số thực trên từng token F có thể lớn hơn từng token A: với cùng một trajectory, hệ số token nhóm g bằng λᵍ / (Zₙ × Nₙ,ᵍ), trong đó Zₙ = ∑ᵍ∈Gₙ λᵍ. Không cần đặt λF cao nhất mới tạo được ưu tiên mạnh cho submit.
+Independently normalizing chunks and averaging changes the objective. For N trajectories and K chunks, uniform chunk sampling with sample loss (K/N) times q(n,s) is an unbiased estimator of the trajectory mean. Other sampling distributions require corresponding probability weights. Equivalence assumes identical conditioning context. Shorter context or dropped targets changes the training problem and must be documented. Context length, packing, and window construction remain implementation decisions.
 
-Không dùng λF = 2 làm mặc định khi đã chuẩn hóa theo nhóm: khi đó một câu submit ngắn sẽ nhận nhiều hệ số hơn tất cả action trung gian cộng lại. Với protocol submit đã có sẵn trong prompt, baseline dành phần lớn objective cho action là lựa chọn hợp lý hơn để kiểm chứng trước.
+Implementation requirements:
 
-### 5.2. Khác biệt so với công thức SmartAD
+- Use per-token CE with `reduction='none'`, `ignore_index=-100`. Causally shift predictions, labels, groups, and weights exactly once.
+- Reduce weighted CE and denominators in FP32. This does not fix forward-pass instability.
+- Separate attention and loss masks: observations remain visible as context.
+- Preserve reduction across DDP ranks, uneven final batches, and gradient accumulation. Averaging unequal local means is insufficient.
+- Packing must preserve trajectory boundaries, prevent cross-task attention, and retain each trajectory's denominator. Backend support is unverified.
 
-SmartAD dùng weighted-token CE, chia tổng loss có trọng số cho tổng trọng số token, với hệ số reason/action/final = 1/1,5/2. Nếu áp dụng trực tiếp, số token reasoning vẫn ảnh hưởng tổng tỷ trọng. Baseline này thay đổi normalization sang mean theo nhóm và mean theo trajectory.
+## 7. Training scope and checkpointing
 
-Đây là **thiết kế điều chỉnh từ SmartAD**, không phải tái lập nguyên bản. Chọn trajectory bằng rule cũng không phải student-NLL selection và chưa chứng minh capability alignment với student.
+The agreed baseline trains on **4,000 trajectories for one epoch**, with fixed loss weights. General-data replay is not part of this initial baseline. One epoch does not establish that forgetting is absent or that training fits the compute budget.
 
-Để kiểm chứng tác dụng của thiết kế, baseline đối chứng nên dùng assistant-only CE đồng đều trên cùng dữ liệu/representation và cùng ngân sách. Có thể thêm weighted-token CE gần SmartAD làm đối chứng thứ hai. Khi so sánh, ghi rõ normalization và số token được supervise; “uniform token loss” và “uniform mean theo nhóm” là hai objective khác nhau.
+Save full training checkpoints: adapter, optimizer, scheduler, global step, and data/RNG state. Record consumed examples to prevent accidental replay on resume. Loading adapter weights alone starts a new optimization stage. Any future continuation would require an explicit data and learning-rate schedule; no dataset expansion or second epoch is currently planned.
 
-<!-- pagebreak -->
+## 8. Evaluation and checkpoint policy
 
-## 6. Batching, windows và DDP không được đổi objective
+For the first fixed one-epoch experiment, evaluate the **final checkpoint** on all 500 SWE-bench Verified tasks. Teacher-trajectory validation loss is optional diagnostic information, not the checkpoint-selection criterion. Retain the existing 50 held-out NVIDIA tasks and exclude all their attempts from training, including expansions.
 
-Công thức trên định nghĩa objective ở mức trajectory đầy đủ. Trainer có thể xử lý từng turn hoặc nhiều đoạn để phù hợp bộ nhớ, nhưng không được âm thầm chuyển sang trung bình theo số token hay trung bình độc lập của mỗi turn.
+Freeze data, weights, training endpoint, and evaluation settings before running. Compare base and adapter with the same harness version, patch protocol, prompt, generation settings, environment, step/token budgets, and task set. Published scores are context, not a controlled comparison. Report resolved rate, resource use, and protocol/infrastructure failures.
 
-Nếu trajectory được chia thành nhiều sample, mỗi target token chỉ được supervise **một lần**. Token lịch sử xuất hiện lại để làm context phải mask; tránh tính loss nhiều lần vì overlap. Giữ Nₙ,ᵍ và Zₙ theo toàn trajectory đã biểu diễn, không tính lại theo riêng từng đoạn.
+If diagnostic teacher-forced CE is computed, report unweighted R/C/A/F CE with a fixed aggregation convention, token counts, and weighted total loss. These measure imitation on teacher states. They do not establish rollout success; matching submit syntax does not establish patch correctness.
 
-Có thể viết contribution của sample/đoạn s thuộc trajectory n:
+Repeatedly selecting weights, checkpoints, or extensions using Verified results turns it into development data. Describe subsequent results accordingly or use a separate untouched test set. Reserve remote budget for base/adapter inference and benchmark execution. Runtime within the 30-hour Kaggle quota is unverified.
 
-$$q_{n,s}=\sum_{g\in G_n}\frac{\lambda_g}{Z_nN_{n,g}}\sum_{i\in I_{n,g,s}}\ell_{n,i},\qquad L_n=\sum_s q_{n,s}.$$
+## 9. Checks required before training
 
-Điều kiện là các Iₙ,ᵍ,ₛ phân hoạch Iₙ,ᵍ: không trùng target và không bỏ target. Nếu có N trajectory và K sample/đoạn trong toàn bộ tập, lấy sample đồng đều và dùng sample loss (K/N) × qₙ,ₛ sẽ cho kỳ vọng đúng bằng mean loss trên N trajectory. Nếu sampling theo cách khác, phải tính lại trọng số theo xác suất lấy mẫu; không mặc định sample mean bằng trajectory mean.
+1. Every supervised assistant token has one group and its weight 1.0, 0.75, 1.5, or 2.0. Context/padding have `labels=-100`; A/F do not overlap.
+2. Official token IDs and tool payloads are preserved, including multi-call messages, Unicode, multiline commands, quotes, and special-token boundaries.
+3. Submit strings in prompts, reasoning, prose, or observations do not receive F. Earlier failed submits remain A; terminal calls without observations work.
+4. Numerical checks cover weighted CE sums/counts, empty groups, masks, causal shifts, and invariance to coefficient scaling. Duplicated reasoning targets increase their weighted count as specified by the formula.
+5. Chunk contributions reconstruct full-trajectory loss under identical context. Sampling, accumulation, and one/two-GPU reduction preserve the objective.
+6. A remote backward smoke test produces finite gradients and updates adapters. Resume preserves optimizer/scheduler state and data position.
 
-Cắt bỏ token hoặc dùng context ngắn hơn sẽ thay đổi target/context được học; đó là một thay đổi dataset/training policy phải ghi rõ. Tài liệu này chưa quyết định context window, packing hay số turn được giữ. Không được tuyên bố giữ nguyên objective của full-history nếu context đã bị rút ngắn.
+These are future trainer requirements, not claims that trainer checks have run. This documentation update performs no training, inference, or benchmark execution.
 
-### 6.1. Yêu cầu triển khai loss
+## 10. Data status and provenance
 
-- Teacher forcing: dự đoán token i từ các token trước i. Shift logits và labels theo causal LM đúng một lần; shift nhóm/weights tương ứng. Tránh shift kép nếu model/trainer đã thực hiện.
-- Dùng per-token CE với `reduction='none'`, `ignore_index=-100`. Không lấy scalar loss mặc định của model rồi nhân lại hệ số.
-- Tính tổng CE theo nhóm và reduction bằng FP32, kể cả khi forward dùng mixed precision. Quy tắc này không tự giải quyết bất ổn số học bên trong model.
-- Padding không có label, không có group weight. Attention mask và loss mask là hai khái niệm khác nhau; masked observation vẫn có thể được attention đọc làm context.
-- Với DDP, giữ normalization theo sample/trajectory nhất quán giữa các rank; không lấy trung bình đơn giản của các rank có batch size khác nhau. Batch cuối và gradient accumulation phải tính đúng theo số sample đóng góp.
-- Không sinh labels cho user/tool text chỉ vì template biểu diễn tool observation thành user block. Nguồn role/structured fields phải được đối chiếu với render.
-- Packing nếu dùng phải giữ ranh giới trajectory, tránh cross-task attention và giữ denominator của từng trajectory. Đây là yêu cầu triển khai, chưa xác nhận backend hỗ trợ.
+The baseline contains 4,000 trajectories from distinct tasks that originally each had at least two successful attempts. Files are under `data/processed/mini_swe_agent_rule_baseline_4000/`, containing normalized messages, rendered text, token counts, and action candidates. **Training labels, token group masks, and a weighted-loss trainer are not implemented.**
 
-Mục tiêu là loss và gradient tương đương giữa chạy một GPU và chia cùng effective batch trên hai GPU, trong sai số số học cho phép. DDP không tự bảo đảm điều này nếu custom reduction hoặc weighting sai.
+The baseline has 191,891,858 serialized tokens and a median of 40,715 tokens per trajectory. These are input-text counts, not supervised-target counts or measured runtime. Reducing loss weights does not remove context computation. Success-only SFT does not guarantee recovery from student errors or improvement over base. Exact teacher-token CE gives no explicit credit for alternative valid commands, and successful teachers can contain mistakes.
 
-## 7. Validation offline và lựa chọn checkpoint
+Sources and pinned artifacts:
 
-Dùng 50 task held-out đã chốt; loại toàn bộ attempts của các task đó khỏi train. Final test là SWE-bench Verified 500 task, không dùng để chọn trọng số/checkpoint.
+1. [SmartAD, Section 3.3 — Segment-Weighted Agent Loss](https://aclanthology.org/2026.findings-acl.1349.pdf).
+2. [mini-SWE-agent v2.4.6](https://github.com/SWE-agent/mini-swe-agent/releases/tag/v2.4.6).
+3. [SWE-bench prompt configuration](https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/config/benchmarks/swebench.yaml).
+4. [Ordinary mini configuration](https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/config/mini.yaml).
+5. [Prompt construction](https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/agents/default.py) and [Docker submission detection](https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/environments/docker.py).
+6. [NVIDIA Open-SWE-Traces](https://huggingface.co/datasets/nvidia/Open-SWE-Traces), v1.2, split `minisweagent`, revision `e192b26a43b8d09f156eeee781aef8e6bd5108ba`; Qwen3.8-27B Thinking, `resolved=1`.
+7. [Pinned Qwen3.5-4B tokenizer](https://huggingface.co/Qwen/Qwen3.5-4B/tree/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a).
+8. Local submit audit: `data/interim/nvidia_success_submission_audit_2026-10-13.json`.
+9. Baseline manifest: `data/processed/mini_swe_agent_rule_baseline_4000/task_selection_manifest.json`; SHA256 `dba8102cbd90be706a48dc244b444718998f974228077fac0a5a7ee564e628fe`.
 
-Teacher-forced validation dùng cùng template, phân vùng, normalization và hệ số với training. Báo cáo riêng:
-
-- **Action CE:** mean của mean CE nhóm A trên các validation trajectory; tín hiệu chính để chọn checkpoint cho phase 1.
-- **Submit CE:** mean CE nhóm F; dùng cùng Action CE để phát hiện trade-off, không xem là patch correctness.
-- **Reasoning CE và Content CE:** theo dõi sự thay đổi, không thay thế metric action.
-- **Weighted total loss:** objective đầy đủ theo công thức ở mục 5.
-- Số token/trajectory có mặt trong từng nhóm và số target không phân vùng được.
-
-Quy tắc khởi đầu: chọn checkpoint có Action CE thấp nhất; nếu ngang nhau trong độ chính xác báo cáo, ưu tiên Submit CE thấp hơn, rồi checkpoint sớm hơn. Nếu Submit CE hoặc các kiểm tra protocol xấu đi rõ rệt, cần xem lại cấu hình thay vì kết luận chỉ từ total loss.
-
-Có thể bổ sung student sinh next action trên held-out teacher states để đo parse/schema validity, Bash syntax và action-class agreement. Phép đo này vẫn offline, không cần rollout toàn task; không phải phép đo CE ở trên. Command executability chỉ được xác nhận khi có environment phù hợp; command động/dependency chưa kiểm tra phải báo chưa xác minh. Lần chuẩn bị tài liệu này không sinh action hoặc chạy command teacher/student.
-
-<!-- pagebreak -->
-
-## 8. Kiểm chứng bắt buộc trước training
-
-1. Mỗi target assistant token có đúng một group; context và padding đều `labels=-100`. Không có token F bị tính thêm vào A.
-2. Tool-call tokens khớp template chính thức, gồm nhiều calls, Unicode, command nhiều dòng và quotes; không đổi payload command.
-3. Marker submit trong prompt, reasoning, content hay observation không nhận nhãn F. Submit thất bại ở giữa trajectory không nhận nhãn F.
-4. Terminal submit thiếu observation cuối vẫn hợp lệ. Không tạo token observation hoặc reference patch để làm target.
-5. Token IDs của input khớp tokenization toàn text; kiểm tra riêng offsets của special tokens và ranh giới span.
-6. Toy numerical check xác nhận mean theo nhóm, nhóm rỗng, masking và causal shift. Lặp thêm token reasoning có cùng mean CE không đổi tỷ lệ hệ số reasoning; nhân tất cả λ bằng cùng một hằng số không đổi loss.
-7. Các đoạn target không overlap; cộng contributions tái tạo loss full-trajectory trên context giống nhau. Kiểm chứng scaling nếu trainer lấy sample theo turn/window.
-8. Một lần backward cho thấy gradient hữu hạn và adapter thực sự cập nhật. So sánh reduction một GPU/hai GPU với cùng effective batch, rồi mới chạy dài.
-
-Đây là checklist dành cho trainer sẽ triển khai; không phải các kiểm tra đã chạy trong lần tạo tài liệu.
-
-## 9. Trạng thái dữ liệu và giới hạn kết luận
-
-Baseline đã chọn 4.000 trajectory từ 4.000 task khác nhau, mỗi task ban đầu có ít nhất hai successful attempts. Dữ liệu ở `data/processed/mini_swe_agent_rule_baseline_4000/`; validation held-out có 50 task. Các record hiện có normalized messages, text render, token count và action candidates; **chưa có training labels, token group masks hoặc trainer weighted loss**.
-
-Tổng text đã serialize của baseline khoảng 191,9 triệu token, trung vị 40.715 token/trajectory. Các số này không phải số target tokens được supervise và không phải ngân sách runtime đã đo. Giảm hệ số reasoning không giảm chi phí forward/backward của context còn nằm trong input. Chưa khẳng định 4.000 trajectory × 1 epoch vừa quota Kaggle 30 giờ.
-
-Máy local chỉ xử lý dữ liệu, tokenizer, mã nguồn và điều khiển KRun; training dự kiến chạy trên Kaggle. Chưa có phiên GPU, training, rollout hoặc kết quả student nào được tạo bởi tài liệu này.
-
-Success-only SFT học hành vi teacher trên teacher states. Nó chưa chứng minh student phục hồi được từ lỗi của chính mình, biết tự chọn thời điểm submit trong rollout, hoặc giải bug tốt hơn. Tác dụng của loss weighting phải được đo; các token dễ đoán trong câu submit không nên được dùng làm bằng chứng thay thế năng lực giải task.
-
-## 10. Nguồn và provenance
-
-1. **SmartAD, mục 3.3 — Segment-Weighted Agent Loss:** https://aclanthology.org/2026.findings-acl.1349.pdf
-2. **mini-SWE-agent — release v2.4.6:** https://github.com/SWE-agent/mini-swe-agent/releases/tag/v2.4.6
-3. **SWE-bench instance template, v2.4.6:** https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/config/benchmarks/swebench.yaml
-4. **DefaultAgent.run dựng prompt, v2.4.6:** https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/agents/default.py
-5. **Docker environment nhận submit, v2.4.6:** https://github.com/SWE-agent/mini-swe-agent/blob/v2.4.6/src/minisweagent/environments/docker.py
-6. **Teacher dataset:** NVIDIA Open-SWE-Traces v1.2, split minisweagent, revision `e192b26a43b8d09f156eeee781aef8e6bd5108ba`; teacher Qwen3.8-27B Thinking, resolved=1. https://huggingface.co/datasets/nvidia/Open-SWE-Traces
-7. **Student tokenizer/template:** https://huggingface.co/Qwen/Qwen3.5-4B/tree/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
-8. **Audit submit local:** `data/interim/nvidia_success_submission_audit_2026-10-13.json`.
-9. **Manifest baseline:** `data/processed/mini_swe_agent_rule_baseline_4000/task_selection_manifest.json`; SHA256 `dba8102cbd90be706a48dc244b444718998f974228077fac0a5a7ee564e628fe`.
-
-Tài liệu được lưu ở dạng Markdown để đọc và chỉnh sửa trực tiếp. Dữ liệu trajectory không được nhúng vào tài liệu và không được commit cùng tài liệu.
+Trajectory data stays local and is not embedded in this document or committed.

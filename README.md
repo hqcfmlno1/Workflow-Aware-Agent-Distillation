@@ -49,8 +49,11 @@ Repo có pipeline chuẩn bị NVIDIA phase 1, collector OmniCode và báo cáo 
 Máy local chỉ chuẩn bị dữ liệu và lưu tokenizer; fine-tune chạy trên môi trường khác.
 Trainer QLoRA, launcher KRun và evaluation student chưa được triển khai.
 Xem [cách chạy và định nghĩa metric](docs/action_focused_sft_phase1.md).
-Thiết kế [hàm loss Action-focused SFT](docs/action_focused_sft_loss_design.md) dùng
-group-normalized weighted CE; trainer và token loss masks chưa được triển khai.
+The [Action-focused SFT loss design](docs/action_focused_sft_loss_design.md) uses
+SmartAD-style weighted-token CE with reasoning/content/action/submit weights
+**1 / 0.75 / 1.5 / 2**. The first run evaluates the final one-epoch checkpoint on
+SWE-bench Verified; teacher validation loss is diagnostic. Trainer and token loss
+masks are not implemented yet.
 Notebook phân tích: [NVIDIA trajectories cho Action-focused SFT](notebooks/nvidia_trajectory_action_focused_sft.ipynb).
 
 1. Chuẩn bị một tập NVIDIA nhỏ, loại overlap và chia train/validation.
