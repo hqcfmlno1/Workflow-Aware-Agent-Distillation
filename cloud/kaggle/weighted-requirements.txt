@@ -1,0 +1,6 @@
+# PyTorch/CUDA are supplied by Kaggle; do not replace the image's CUDA build.
+transformers==5.19.0
+peft==0.21.2
+bitsandbytes==0.50.2
+accelerate==1.14.0
+pytest>=8,<10

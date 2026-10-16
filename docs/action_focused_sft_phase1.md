@@ -114,8 +114,9 @@ student performance.
 
 ## Evaluation policy and historical data
 
-The first experiment uses fixed weights and trains the selected 4,000 trajectories
-for one epoch, then evaluates the final checkpoint on all 500 tasks of
+The first experiment uses fixed weights and trains for one epoch over an explicit
+context-fitting subset of the 4,000 rule-selected trajectories, then evaluates the
+final checkpoint on all 500 tasks of
 `princeton-nlp/SWE-bench_Verified`, revision
 `c104f840cc67f8b6eec6f759ebc8b2693d585d4a`. Teacher-trajectory validation CE is an
 optional diagnostic, not the checkpoint-selection criterion. Compare base and
@@ -167,6 +168,36 @@ Outputs, diagnostics, remaining winners, and verification are under
 [data instructions](../data/README.md) for details. No pilot or validation record
 is changed. The [loss design](action_focused_sft_loss_design.md) specifies
 weighted-token CE, masking, per-trajectory reduction, the one-epoch evaluation
-policy, and checkpointing requirements. Loss masks, trainer implementation, remote
-profiling, and training remain separate work. Rules are a quality/complexity proxy,
-not student NLL alignment.
+policy, and checkpointing requirements. CPU token masks and a remote weighted-loss
+pilot are implemented; annotation of all 4,000 trajectories has been verified.
+The original precision probe stopped on OOM at 8,044 tokens. Optimized QLoRA
+subsequently completed two finite optimizer steps at 16,320 tokens on both one
+T4 and a partitioned pair of T4s, before OOM at 32,766 tokens. Further internal
+Gated DeltaNet compute blocking retains complete histories and attached state
+gradients; see the current results in the [Kaggle instructions](../cloud/kaggle/README.md).
+Baseline SFT has not started.
+Rules are a quality/complexity proxy, not student NLL alignment.
+
+## Initial training context policy
+
+Retain complete trajectories that fit the measured remote training limit. Preserve
+longer originals separately for future processing. Do not truncate, create sliding
+windows, or sample replacement tasks for the initial run. The selected count must
+be made explicit before training; a native model context limit does not establish
+training feasibility on a T4.
+
+| Context cap (tokens) | Complete trajectories among the selected 4,000 |
+| --- | ---: |
+| 8,192 | 4 |
+| 16,384 | 220 |
+| 32,768 | 1,416 |
+| 65,536 | 3,145 |
+| 131,072 | 3,924 |
+| 262,144 | 4,000 |
+
+These are length counts, not measured hardware limits. Next-step examples retain
+the preceding history when built faithfully, so later steps can still exceed the
+training limit. Splitting targets alone does not solve that input-length problem.
+The earlier 5,225-token probe is superseded by full-history QLoRA optimization.
+Sampled lengths do not establish a universal maximum context or an effective
+training count. No replacement sampling or shortened-context baseline is active.
