@@ -156,8 +156,8 @@ class CheckpointManager:
     """
 
     def __init__(self, directory, identity, *, save_every=5, keep_last=2, publisher=None):
-        if save_every < 1 or keep_last < 2:
-            raise ValueError("Require a positive interval and at least two retained checkpoints")
+        if save_every < 1 or keep_last < 1:
+            raise ValueError("Require a positive interval and at least one retained checkpoint")
         self.directory = Path(directory)
         self.identity = json.loads(json.dumps(identity, sort_keys=True))
         self.save_every = save_every
@@ -212,7 +212,14 @@ class CheckpointManager:
                 })
         except Exception as exc:
             error = str(exc)
-        _agree(error)
+        try:
+            _agree(error)
+        except RuntimeError:
+            # All ranks have finished their writes before agreement returns.
+            if rank == 0:
+                with suppress(OSError):
+                    shutil.rmtree(staging)
+            raise
         error = None
         if rank == 0:
             try:
@@ -242,6 +249,11 @@ class CheckpointManager:
                                   "global_step": progress["global_step"],
                                   "published": self.publisher is not None}), flush=True)
             except Exception as exc:
+                # A committed checkpoint survives a failed publication. Only
+                # pre-commit staging files are disposable.
+                if staging.exists():
+                    with suppress(OSError):
+                        shutil.rmtree(staging)
                 error = str(exc)
         _agree(error)
         self.last_step = progress["global_step"]
@@ -385,43 +397,98 @@ def run_worker_process(command, *, timeout, env=None, check=False):
 
 
 class HuggingFacePublisher:
-    """Publish a complete checkpoint and latest pointer in ONE private Hub commit."""
+    """Publish complete state atomically; optional retention destroys repo history.
 
-    def __init__(self, repo_id, *, prefix="training"):
+    keep_last is an explicit opt-in for a dedicated, single-writer repository.
+    It keeps snapshots in the current tree and permanently squashes main history.
+    The default preserves all checkpoint files and all repository history.
+    """
+
+    def __init__(self, repo_id, *, prefix="training", keep_last=None, repo_type="model"):
         path = PurePosixPath(prefix)
         if not path.parts or path.is_absolute() or ".." in path.parts or "\\" in prefix:
             raise ValueError("Checkpoint Hub prefix must be a nonempty relative path")
         self.repo_id = repo_id
+        if repo_type not in ("model", "dataset"):
+            raise ValueError("Checkpoint repo type must be model or dataset")
+        self.repo_type = repo_type
         self.prefix = str(path)
+        if keep_last is not None and (type(keep_last) is not int or keep_last < 2):
+            raise ValueError("Hub retention requires at least two recovery snapshots")
+        self.keep_last = keep_last
+
+    def _dedicated_files(self, files):
+        if self.keep_last is None:
+            return
+        for name in files:
+            if name in ("README.md", ".gitattributes"):
+                continue
+            if name == f"{self.prefix}/latest.json":
+                continue
+            relative = name.removeprefix(f"{self.prefix}/")
+            parts = PurePosixPath(relative).parts
+            if (relative == name or len(parts) != 2 or not _NAME.fullmatch(parts[0])
+                    or (parts[1] not in ("adapter.pt", "manifest.json")
+                        and not re.fullmatch(r"rank-\d{5}\.pt", parts[1]))):
+                raise ValueError("History cleanup requires a dedicated checkpoint repository")
 
     def validate(self):
         from huggingface_hub import HfApi
 
-        info = HfApi().repo_info(self.repo_id, repo_type="model")
+        api = HfApi()
+        info = api.repo_info(self.repo_id, repo_type=self.repo_type)
         if not info.private:
             raise ValueError("Checkpoint repository must be private")
+        if self.keep_last is not None:
+            self._dedicated_files(api.list_repo_files(
+                self.repo_id, repo_type=self.repo_type, revision=info.sha,
+            ))
+            refs = api.list_repo_refs(self.repo_id, repo_type=self.repo_type,
+                                      include_pull_requests=True)
+            if (any(branch.name != "main" for branch in refs.branches)
+                    or refs.tags or refs.converts or refs.pull_requests):
+                raise ValueError("History cleanup requires dedicated main without other refs")
         return info
 
+    def _squash(self, api, revision):
+        if self.keep_last is not None:
+            if self.validate().sha != revision:
+                raise RuntimeError("Concurrent Hub modification before history cleanup")
+            api.super_squash_history(
+                repo_id=self.repo_id, repo_type=self.repo_type, branch="main",
+                commit_message=f"Keep latest {self.keep_last} full training checkpoints",
+            )
+
     def __call__(self, checkpoint):
-        from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
+        from huggingface_hub import (
+            CommitOperationAdd,
+            CommitOperationDelete,
+            HfApi,
+            hf_hub_download,
+        )
 
         revision = self.validate().sha
         manifest = _manifest(checkpoint)
         api = HfApi()
         pointer_name = f"{self.prefix}/latest.json"
-        if pointer_name in api.list_repo_files(self.repo_id, repo_type="model", revision=revision):
-            pointer = hf_hub_download(self.repo_id, pointer_name, revision=revision)
+        files = api.list_repo_files(self.repo_id, repo_type=self.repo_type, revision=revision)
+        self._dedicated_files(files)
+        if pointer_name in files:
+            pointer = hf_hub_download(self.repo_id, pointer_name, revision=revision,
+                                      repo_type=self.repo_type)
             name = json.loads(Path(pointer).read_text())["checkpoint"]
             if not _NAME.fullmatch(name):
                 raise ValueError("Invalid remote checkpoint name")
             remote_path = hf_hub_download(
                 self.repo_id, f"{self.prefix}/{name}/manifest.json", revision=revision,
+                repo_type=self.repo_type,
             )
             remote = json.loads(Path(remote_path).read_text())
             if (remote["identity"] != manifest["identity"]
                     or remote["world_size"] != manifest["world_size"]):
                 raise ValueError("Remote checkpoint identity differs; use a new Hub prefix")
             if remote == manifest:
+                self._squash(api, revision)  # Finish a cleanup whose response was lost.
                 return  # Retry after a successful commit whose response was lost.
             if remote["progress"]["global_step"] >= manifest["progress"]["global_step"]:
                 raise ValueError("Remote checkpoint is already at this step or newer")
@@ -432,23 +499,38 @@ class HuggingFacePublisher:
             path_in_repo=f"{self.prefix}/latest.json",
             path_or_fileobj=json.dumps({"checkpoint": checkpoint.name}).encode(),
         ))
-        api.create_commit(repo_id=self.repo_id, repo_type="model", operations=operations,
-                          parent_commit=revision,
-                          commit_message=f"Save training checkpoint {checkpoint.name}")
+        if self.keep_last is not None:
+            names = {PurePosixPath(name).parts[-2] for name in files
+                     if name.startswith(f"{self.prefix}/checkpoint-")}
+            if any(int(name.split("-")[1]) > manifest["progress"]["global_step"]
+                   for name in names):
+                raise ValueError("Remote contains a checkpoint newer than the latest pointer")
+            retained = set(sorted(names | {checkpoint.name},
+                                  key=lambda name: int(name.split("-")[1]))[-self.keep_last:])
+            operations.extend(CommitOperationDelete(path_in_repo=name) for name in files
+                              if name.startswith(f"{self.prefix}/checkpoint-")
+                              and PurePosixPath(name).parts[-2] not in retained)
+        committed = api.create_commit(
+            repo_id=self.repo_id, repo_type=self.repo_type, operations=operations,
+            parent_commit=revision, commit_message=f"Save training checkpoint {checkpoint.name}",
+        )
+        self._squash(api, committed.oid)
 
 
-def download_latest_checkpoint(repo_id, destination, *, prefix="training"):
+def download_latest_checkpoint(repo_id, destination, *, prefix="training", repo_type="model"):
     """Pin the Hub revision so the pointer and all state files refer to one commit."""
     from huggingface_hub import hf_hub_download, snapshot_download
 
-    store = HuggingFacePublisher(repo_id, prefix=prefix)
+    store = HuggingFacePublisher(repo_id, prefix=prefix, repo_type=repo_type)
     revision = store.validate().sha
-    pointer = hf_hub_download(repo_id, f"{store.prefix}/latest.json", revision=revision)
+    pointer = hf_hub_download(repo_id, f"{store.prefix}/latest.json", revision=revision,
+                              repo_type=store.repo_type)
     name = json.loads(Path(pointer).read_text())["checkpoint"]
     if not _NAME.fullmatch(name):
         raise ValueError("Invalid remote checkpoint name")
     downloaded = snapshot_download(repo_id, revision=revision, local_dir=destination,
-                                   allow_patterns=[f"{store.prefix}/{name}/*"])
+                                   allow_patterns=[f"{store.prefix}/{name}/*"],
+                                   repo_type=store.repo_type)
     path = Path(downloaded) / store.prefix / name
     _manifest(path)
     return path
@@ -459,7 +541,7 @@ def add_checkpoint_arguments(parser):
     parser.add_argument("--keep-checkpoints", type=int, default=2)
     parser.add_argument("--checkpoint-dir", type=Path)
     parser.add_argument("--resume-from", help="Committed checkpoint directory, or latest")
-    parser.add_argument("--checkpoint-hub-repo", help="Existing private HF model repo; HF_TOKEN")
+    parser.add_argument("--checkpoint-hub-repo", help="Existing private HF repo; HF_TOKEN")
     parser.add_argument("--checkpoint-hub-prefix", default="training")
     parser.add_argument("--stop-margin-seconds", type=int, default=120)
     parser.add_argument("--expected-step-seconds", type=int, default=180)
@@ -477,16 +559,24 @@ def checkpoint_arguments(args):
                         ("--checkpoint-hub-repo", args.checkpoint_hub_repo)):
         if value is not None:
             values.extend([flag, str(value)])
+    if getattr(args, "checkpoint_hub_keep_last", None) is not None:
+        values.extend(["--checkpoint-hub-keep-last", str(args.checkpoint_hub_keep_last)])
+    if getattr(args, "checkpoint_hub_repo_type", None) is not None:
+        values.extend(["--checkpoint-hub-repo-type", args.checkpoint_hub_repo_type])
     return values
 
 
 def validate_checkpoint_arguments(args):
-    if args.save_every_steps < 1 or args.keep_checkpoints < 2:
-        raise ValueError("Require save-every-steps >= 1 and keep-checkpoints >= 2")
+    if args.save_every_steps < 1 or args.keep_checkpoints < 1:
+        raise ValueError("Require save-every-steps >= 1 and keep-checkpoints >= 1")
     if args.stop_margin_seconds < 0 or args.expected_step_seconds < 0:
         raise ValueError("Stop margin and expected step duration must be nonnegative")
     if args.checkpoint_hub_repo:
-        HuggingFacePublisher(args.checkpoint_hub_repo, prefix=args.checkpoint_hub_prefix)
+        HuggingFacePublisher(args.checkpoint_hub_repo, prefix=args.checkpoint_hub_prefix,
+                             keep_last=getattr(args, "checkpoint_hub_keep_last", None),
+                             repo_type=getattr(args, "checkpoint_hub_repo_type", "model"))
+    elif getattr(args, "checkpoint_hub_keep_last", None) is not None:
+        raise ValueError("Hub retention requires checkpoint-hub-repo")
 
 
 def training_identity(script, *, model, revision, records_sha256, settings):

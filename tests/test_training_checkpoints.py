@@ -16,9 +16,18 @@ def test_save_schedule_counts_completed_updates_and_forces_a_final_save(tmp_path
     assert not manager.due(4)
     assert manager.due(5)
     assert manager.due(7, force=True)
-    for settings in ({"save_every": 0}, {"keep_last": 1}):
+    for settings in ({"save_every": 0}, {"keep_last": 0}):
         with pytest.raises(ValueError):
             checkpoints.CheckpointManager(tmp_path, {}, **settings)
+
+
+def test_cli_accepts_single_retained_checkpoint_for_bounded_storage():
+    from types import SimpleNamespace
+
+    args = SimpleNamespace(save_every_steps=5, keep_checkpoints=1,
+                           stop_margin_seconds=600, expected_step_seconds=240,
+                           checkpoint_hub_repo=None)
+    checkpoints.validate_checkpoint_arguments(args)
 
 
 def test_budget_stops_before_next_step_and_signal_only_requests_a_boundary_stop():
@@ -49,7 +58,11 @@ def test_hard_timeout_terminates_launcher_and_its_worker_process(tmp_path):
     deadline = time.monotonic() + 2
     while True:
         status = Path(f"/proc/{pid}/stat")
-        if not status.exists() or status.read_text().split()[2] == "Z":
+        try:
+            state = status.read_text().split()[2]
+        except (FileNotFoundError, ProcessLookupError):
+            break  # The killed process may disappear while /proc is being read.
+        if state == "Z":
             break
         assert time.monotonic() < deadline, "A worker survived the launcher timeout"
         time.sleep(0.01)
@@ -161,19 +174,22 @@ def test_failed_publication_keeps_prior_checkpoint_and_local_recovery(tmp_path):
     training = setup_training()
 
     def publish(path):
-        if path.name == "checkpoint-00000003":
+        if path.name == "checkpoint-00000002":
             raise OSError("network unavailable")
 
-    manager = checkpoints.CheckpointManager(tmp_path, {"data": "a"}, publisher=publish)
-    for number in (1, 2):
-        step(training)
-        save(manager, training, number)
+    manager = checkpoints.CheckpointManager(tmp_path, {"data": "a"}, keep_last=1,
+                                            publisher=publish)
+    step(training)
+    save(manager, training, 1)
     step(training)
     with pytest.raises(RuntimeError, match="network unavailable"):
-        save(manager, training, 3)
+        save(manager, training, 2)
     assert (tmp_path / "checkpoint-00000001").is_dir()
-    assert checkpoints.latest_checkpoint(tmp_path).name == "checkpoint-00000003"
-    assert json.loads((tmp_path / "latest.json").read_text())["checkpoint"] == "checkpoint-00000003"
+    assert checkpoints.latest_checkpoint(tmp_path).name == "checkpoint-00000002"
+    assert json.loads((tmp_path / "latest.json").read_text())["checkpoint"] == "checkpoint-00000002"
+    assert sorted(p.name for p in tmp_path.glob("checkpoint-*")) == [
+        "checkpoint-00000001", "checkpoint-00000002",
+    ]
 
 
 def test_completed_local_checkpoint_can_retry_publication_without_replaying_training(tmp_path):
@@ -218,13 +234,59 @@ def test_successful_saves_keep_two_complete_checkpoints_without_overwriting(tmp_
         save(manager, training, 3)
 
 
+def test_single_retention_prunes_only_after_new_checkpoint_is_published(tmp_path):
+    observed = []
+
+    def publish(path):
+        observed.append(sorted(p.name for p in tmp_path.glob("checkpoint-*")))
+        assert checkpoints.latest_checkpoint(tmp_path) == path
+
+    training = setup_training()
+    manager = checkpoints.CheckpointManager(tmp_path, {"data": "a"}, keep_last=1,
+                                            publisher=publish)
+    for number in (1, 2, 3):
+        step(training)
+        save(manager, training, number)
+    assert observed == [
+        ["checkpoint-00000001"],
+        ["checkpoint-00000001", "checkpoint-00000002"],
+        ["checkpoint-00000002", "checkpoint-00000003"],
+    ]
+    assert sorted(p.name for p in tmp_path.glob("checkpoint-*")) == [
+        "checkpoint-00000003",
+    ]
+    assert load(manager, setup_training()) == {"global_step": 3, "next_batch": 3}
+
+
+def test_failed_staged_write_removes_its_temporary_files_and_keeps_prior(tmp_path, monkeypatch):
+    training = setup_training()
+    manager = checkpoints.CheckpointManager(tmp_path, {}, keep_last=1)
+    step(training)
+    first = save(manager, training, 1)
+    original = checkpoints._torch_file
+
+    def fail_after_rank_write(path, value):
+        original(path, value)
+        if path.name == "rank-00000.pt":
+            raise OSError("disk full")
+
+    monkeypatch.setattr(checkpoints, "_torch_file", fail_after_rank_write)
+    step(training)
+    with pytest.raises(RuntimeError, match="disk full"):
+        save(manager, training, 2)
+    assert checkpoints.latest_checkpoint(tmp_path) == first
+    assert json.loads((tmp_path / "latest.json").read_text())["checkpoint"] == first.name
+    assert sorted(p.name for p in tmp_path.iterdir()) == [first.name, "latest.json"]
+
+
 def test_hub_prefix_cannot_escape_checkpoint_namespace():
     for prefix in ("../other", "/absolute", "a/../../b", ""):
         with pytest.raises(ValueError):
             checkpoints.HuggingFacePublisher("owner/private-model", prefix=prefix)
 
 
-def test_hub_backup_is_atomic_downloadable_and_cannot_overwrite_another_run(tmp_path, monkeypatch):
+@pytest.fixture
+def fake_hub(tmp_path, monkeypatch):
     from fnmatch import fnmatch
     from types import SimpleNamespace
 
@@ -234,34 +296,71 @@ def test_hub_backup_is_atomic_downloadable_and_cannot_overwrite_another_run(tmp_
     # Checkpoint creation, hashing, commit payloads, downloads, and resume are real.
     revisions = {"0": {}}
     head = ["0"]
+    commits, squashes = [], []
+    failures = {"squash": False}
+    transport = SimpleNamespace(repo_type="model")
+
+    def check_type(kwargs):
+        assert kwargs.get("repo_type", "model") == transport.repo_type
 
     class Hub:
+        def auth_check(self, *_args, **kwargs):
+            check_type(kwargs)
+            assert kwargs["write"] is True
+            if failures.get("write_permission"):
+                raise PermissionError("Token cannot write to this repository")
+
         def repo_info(self, *_args, **_kwargs):
+            check_type(_kwargs)
             return SimpleNamespace(private=True, sha=head[0])
 
         def list_repo_files(self, _repo, *, revision, **_kwargs):
+            check_type(_kwargs)
             return list(revisions[revision])
 
+        def list_repo_refs(self, *_args, **_kwargs):
+            check_type(_kwargs)
+            return SimpleNamespace(branches=[SimpleNamespace(name="main")],
+                                   tags=[], converts=[], pull_requests=[])
+
         def create_commit(self, *, operations, parent_commit=None, **_kwargs):
+            check_type(_kwargs)
             assert parent_commit is not None
             if parent_commit is not None and parent_commit != head[0]:
                 raise RuntimeError("concurrent Hub modification")
             updated = dict(revisions[head[0]])
             for operation in operations:
-                source = operation.path_or_fileobj
-                updated[operation.path_in_repo] = (
-                    source if isinstance(source, bytes) else Path(source).read_bytes()
-                )
-            head[0] = str(len(revisions))
+                if isinstance(operation, huggingface_hub.CommitOperationDelete):
+                    del updated[operation.path_in_repo]
+                else:
+                    source = operation.path_or_fileobj
+                    updated[operation.path_in_repo] = (
+                        source if isinstance(source, bytes) else Path(source).read_bytes()
+                    )
+            commits.append(updated)
+            head[0] = f"commit-{len(commits)}"
             revisions[head[0]] = updated
+            return SimpleNamespace(oid=head[0])
 
-    def download(_repo, filename, *, revision):
+        def super_squash_history(self, **_kwargs):
+            check_type(_kwargs)
+            if failures["squash"]:
+                raise OSError("Hub history cleanup failed")
+            tree = revisions[head[0]]
+            squashes.append(dict(tree))
+            head[0] = f"squash-{len(squashes)}"
+            revisions.clear()
+            revisions[head[0]] = tree
+
+    def download(_repo, filename, *, revision, **kwargs):
+        check_type(kwargs)
         path = tmp_path / "transport-cache" / revision / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(revisions[revision][filename])
         return str(path)
 
-    def snapshot(_repo, *, revision, local_dir, allow_patterns):
+    def snapshot(_repo, *, revision, local_dir, allow_patterns, **kwargs):
+        check_type(kwargs)
         for name, content in revisions[revision].items():
             if any(fnmatch(name, pattern) for pattern in allow_patterns):
                 path = Path(local_dir) / name
@@ -272,6 +371,47 @@ def test_hub_backup_is_atomic_downloadable_and_cannot_overwrite_another_run(tmp_
     monkeypatch.setattr(huggingface_hub, "HfApi", Hub)
     monkeypatch.setattr(huggingface_hub, "hf_hub_download", download)
     monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot)
+    return SimpleNamespace(revisions=revisions, head=head, commits=commits,
+                           squashes=squashes, failures=failures, transport=transport)
+
+
+@pytest.mark.parametrize("keep_last", [2, 3])
+def test_dataset_repo_supports_complete_backup_retention_and_resume(tmp_path, fake_hub, keep_last):
+    fake_hub.transport.repo_type = "dataset"
+    publisher = checkpoints.HuggingFacePublisher(
+        "owner/private-dataset", prefix="first-run", repo_type="dataset", keep_last=keep_last,
+    )
+    manager = checkpoints.CheckpointManager(tmp_path / "source", {}, publisher=publisher)
+    training = setup_training()
+    for number in range(1, keep_last + 2):
+        step(training)
+        save(manager, training, number)
+    restored = checkpoints.download_latest_checkpoint(
+        "owner/private-dataset", tmp_path / "restored", prefix="first-run", repo_type="dataset",
+    )
+    assert load(manager, setup_training(), restored)["global_step"] == keep_last + 1
+    assert len(fake_hub.revisions) == 1
+    assert all("checkpoint-00000001" not in name
+               for name in fake_hub.revisions[fake_hub.head[0]])
+    retained = {name.split("/")[1] for name in fake_hub.revisions[fake_hub.head[0]]
+                if "/checkpoint-" in name}
+    assert len(retained) == keep_last
+
+
+def test_cpu_preflight_requires_dataset_write_permission_without_mutating_repo(fake_hub):
+    from scripts.cloud.checkpoint_preflight import probe_repo
+
+    fake_hub.transport.repo_type = "dataset"
+    assert probe_repo("owner/dataset", repo_type="dataset")["private"] is True
+    assert not fake_hub.commits
+    fake_hub.failures["write_permission"] = True
+    with pytest.raises(PermissionError, match="cannot write"):
+        probe_repo("owner/dataset", repo_type="dataset")
+    assert not fake_hub.commits
+
+
+def test_hub_backup_is_atomic_downloadable_and_cannot_overwrite_another_run(tmp_path, fake_hub):
+    revisions, head = fake_hub.revisions, fake_hub.head
     training = setup_training()
     publisher = checkpoints.HuggingFacePublisher("owner/private-model", prefix="run-a")
     manager = checkpoints.CheckpointManager(tmp_path / "source", {"data": "a"},
@@ -279,7 +419,7 @@ def test_hub_backup_is_atomic_downloadable_and_cannot_overwrite_another_run(tmp_
     step(training)
     save(manager, training, 1)
     # The first durable commit already contains the pointer AND all checkpoint files.
-    published = revisions["1"]
+    published = revisions["commit-1"]
     assert json.loads(published["run-a/latest.json"])["checkpoint"] == "checkpoint-00000001"
     assert set(published) == {
         "run-a/latest.json", "run-a/checkpoint-00000001/adapter.pt",
@@ -291,17 +431,80 @@ def test_hub_backup_is_atomic_downloadable_and_cannot_overwrite_another_run(tmp_
     )
     assert load(manager, setup_training(), restored) == {"global_step": 1, "next_batch": 1}
     publisher(tmp_path / "source/checkpoint-00000001")
-    assert head[0] == "1"  # Idempotent retry after a lost commit response.
+    assert head[0] == "commit-1"  # Idempotent retry after a lost commit response.
     other = checkpoints.CheckpointManager(tmp_path / "other", {"data": "different"},
                                           publisher=publisher)
     with pytest.raises(RuntimeError, match="identity"):
         save(other, setup_training(), 1)
-    assert head[0] == "1"
+    assert head[0] == "commit-1"
     step(training)
     save(manager, training, 2)
     with pytest.raises(ValueError, match="already at this step or newer"):
         publisher(tmp_path / "source/checkpoint-00000001")
-    assert head[0] == "2"
+    assert head[0] == "commit-2"
+
+
+def test_explicit_hub_retention_keeps_two_snapshots_and_discards_history(tmp_path, fake_hub):
+    training = setup_training()
+    publisher = checkpoints.HuggingFacePublisher(
+        "owner/dedicated-first-run", prefix="first-run", keep_last=2,
+    )
+    manager = checkpoints.CheckpointManager(tmp_path / "source", {},
+                                            keep_last=1, publisher=publisher)
+    for number in range(1, 4):
+        step(training)
+        save(manager, training, number)
+    files = fake_hub.revisions[fake_hub.head[0]]
+    assert len(fake_hub.revisions) == 1
+    assert len(fake_hub.squashes) == 3
+    assert all("checkpoint-00000001" not in name for name in files)
+    for number in (2, 3):
+        base = f"first-run/checkpoint-{number:08d}"
+        manifest = json.loads(files[f"{base}/manifest.json"])
+        for name, checksum in manifest["files"].items():
+            import hashlib
+            assert hashlib.sha256(files[f"{base}/{name}"]).hexdigest() == checksum
+    assert json.loads(files["first-run/latest.json"])["checkpoint"] == "checkpoint-00000003"
+    restored = checkpoints.download_latest_checkpoint(
+        "owner/dedicated-first-run", tmp_path / "download", prefix="first-run",
+    )
+    assert load(manager, setup_training(), restored)["global_step"] == 3
+
+
+def test_hub_history_failure_stops_and_retry_finishes_without_duplicate_upload(tmp_path, fake_hub):
+    training = setup_training()
+    publisher = checkpoints.HuggingFacePublisher("owner/dedicated", prefix="run", keep_last=2)
+    manager = checkpoints.CheckpointManager(tmp_path / "source", {},
+                                            keep_last=1, publisher=publisher)
+    step(training)
+    save(manager, training, 1)
+    fake_hub.failures["squash"] = True
+    step(training)
+    with pytest.raises(RuntimeError, match="history cleanup failed"):
+        save(manager, training, 2)
+    assert len(fake_hub.commits) == 2  # Upload succeeded before the history API failed.
+    assert len(list((tmp_path / "source").glob("checkpoint-*"))) == 2
+    fake_hub.failures["squash"] = False
+    publisher(tmp_path / "source/checkpoint-00000002")
+    assert len(fake_hub.commits) == 2
+    assert len(fake_hub.revisions) == 1
+
+
+def test_hub_history_cleanup_rejects_repo_with_another_run_before_any_write(tmp_path, fake_hub):
+    fake_hub.revisions["0"]["other-run/important.txt"] = b"keep this"
+    training = setup_training()
+    publisher = checkpoints.HuggingFacePublisher("owner/shared", prefix="run", keep_last=2)
+    manager = checkpoints.CheckpointManager(tmp_path / "source", {}, publisher=publisher)
+    with pytest.raises(RuntimeError, match="dedicated"):
+        save(manager, training, 1)
+    assert not fake_hub.commits
+    assert not fake_hub.squashes
+    assert fake_hub.revisions["0"]["other-run/important.txt"] == b"keep this"
+
+
+def test_hub_history_cleanup_requires_at_least_two_recovery_snapshots():
+    with pytest.raises(ValueError, match="at least two"):
+        checkpoints.HuggingFacePublisher("owner/dedicated", keep_last=1)
 
 
 def test_cli_help_does_not_load_weights_or_start_remote_training():
@@ -309,7 +512,7 @@ def test_cli_help_does_not_load_weights_or_start_remote_training():
     import sys
 
     root = Path(__file__).resolve().parents[1]
-    for script in ("pilot_optimized_qlora.py", "pilot_ddp_once.py"):
+    for script in ("pilot_optimized_qlora.py", "pilot_ddp_once.py", "train_qlora_epoch.py"):
         result = subprocess.run(
             [sys.executable, str(root / "scripts/training" / script), "--help"],
             capture_output=True, text=True, check=False,

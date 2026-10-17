@@ -1,4 +1,4 @@
-"""Download the latest complete checkpoint from an existing private HF model repo."""
+"""Download a complete checkpoint from a private HF model or dataset repo."""
 
 from __future__ import annotations
 
@@ -14,11 +14,13 @@ from workflow_distillation.training_checkpoints import download_latest_checkpoin
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", required=True, help="Private model repo, owner/name; HF_TOKEN")
+    parser.add_argument("--repo", required=True, help="Private repo, owner/name; HF_TOKEN")
+    parser.add_argument("--repo-type", choices=("model", "dataset"), default="model")
     parser.add_argument("--prefix", default="training")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    path = download_latest_checkpoint(args.repo, args.output, prefix=args.prefix)
+    path = download_latest_checkpoint(args.repo, args.output, prefix=args.prefix,
+                                      repo_type=args.repo_type)
     print(path.resolve())
 
 
