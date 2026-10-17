@@ -1,16 +1,19 @@
 # Lưu checkpoint định kỳ và tiếp tục train trên Kaggle
 
-Hai script `scripts/training/pilot_optimized_qlora.py` và
-`scripts/training/pilot_ddp_once.py` đã tích hợp checkpoint đầy đủ để tiếp tục
-optimization. Mặc định lưu sau mỗi **5 optimizer step đã hoàn thành**, lưu khi
-kết thúc bình thường hoặc dừng có kiểm soát, và giữ **2 checkpoint local** gần nhất.
+Các script `scripts/training/train_qlora_epoch.py`,
+`scripts/training/pilot_optimized_qlora.py` và `scripts/training/pilot_ddp_once.py`
+đã tích hợp checkpoint đầy đủ để tiếp tục optimization. Mặc định lưu sau mỗi
+**5 optimizer step đã hoàn thành**, lưu khi kết thúc bình thường hoặc dừng có
+kiểm soát. Các pilot mặc định giữ **2 checkpoint local** gần nhất; epoch trainer
+giữ **1 checkpoint local**, đồng thời lưu thêm ngay sau update đầu tiên.
 Mỗi step ở đây đã gồm forward, loss, backward, cập nhật optimizer và GradScaler;
 không lưu giữa backward hoặc giữa các microbatch.
 
-Đây vẫn là các script **pilot**. `pilot_ddp_once.py` luôn chỉ có 2 sample,
+`pilot_ddp_once.py` vẫn là **pilot**, luôn chỉ có 2 sample,
 1 sample/GPU, global batch size 2 và **tổng cộng đúng 1 optimizer step**. Nó lưu
 checkpoint cuối ở step 1 dù chu kỳ mặc định là 5; resume checkpoint step 1 sẽ
-thoát thành công mà không train lại. Chưa có trainer baseline một epoch hoàn chỉnh.
+thoát thành công mà không train lại. Epoch trainer chạy toàn bộ tập eligible trong
+một epoch; [hướng dẫn first run](first_run_epoch.md) mô tả dữ liệu, log và resume.
 Không cần chạy lại pilot để bật tính năng trong code; các job cũ không thể được
 khôi phục ngược thành checkpoint nếu khi đó chưa lưu trọng số và optimizer.
 
@@ -34,17 +37,24 @@ checkpoints/
 - `adapter.pt`: tất cả tham số trainable, hiện là LoRA FP32. Không lưu lại base
   model NF4 hoặc frozen embedding/head; chúng được dựng lại từ đúng model revision.
 - `rank-*.pt`: optimizer, GradScaler, scheduler nếu có, RNG Python/NumPy/PyTorch
-  CPU và CUDA của từng rank. Hai pilot hiện không dùng scheduler.
+  CPU và CUDA của từng rank. Các trainer hiện không dùng scheduler.
 - `manifest.json`: global step, vị trí dữ liệu tiếp theo, identity của lượt train,
   số rank, danh sách file và SHA-256. Pilot optimized lưu cả record index và step
-  trong record; DDP lưu vị trí batch 0 hoặc 1.
+  trong record; DDP pilot lưu vị trí batch 0 hoặc 1. Epoch trainer lưu global step,
+  batch kế tiếp và số sample thật đã tiêu thụ.
 - `latest.json`: con trỏ tiện tra cứu. Resume `latest` vẫn quét và kiểm tra các thư
   mục hoàn chỉnh, bỏ qua bản ghi dở hoặc sai checksum để tìm bản hợp lệ gần nhất.
 
 Ghi vào thư mục tạm trước, `fsync`, hoàn tất manifest rồi mới đổi tên để công bố
 checkpoint. Mọi rank phải hoàn tất ghi và đồng ý vị trí dữ liệu. Chỉ rank 0 công bố
-và xóa bản cũ. Giữ ít nhất 2 bản; thư mục tạm từ lần ghi lỗi có thể còn lại và bị bỏ
-qua. Dọn bản cũ chỉ áp dụng cho checkpoint hợp lệ cùng identity trong thư mục đó.
+và xóa bản cũ. Có thể giữ tối thiểu 1 bản local (`--keep-checkpoints 1`), nhưng
+checkpoint trước luôn còn trong lúc ghi bản mới, cập nhật `latest.json` và upload
+nếu đã cấu hình. Chỉ sau khi các bước này thành công, rank 0 mới xóa bản cũ.
+Vì vậy khi giữ 1 bản, dung lượng đỉnh tạm thời vẫn gồm bản cũ và bản mới
+(ước tính khoảng 2,4 GiB cho hai checkpoint r=32/FP32 DDP của lượt train đầu;
+cần đo kích thước thực tế sau lần lưu đầu). Lỗi ghi được bắt sẽ dọn thư mục
+staging; mất máy hoặc bị kill đột ngột có thể để lại thư mục tạm, bị bỏ qua khi
+resume. Dọn bản cũ chỉ áp dụng cho checkpoint hợp lệ cùng identity trong thư mục đó.
 
 Đây là định dạng training riêng của dự án. Không đưa `adapter.pt` trực tiếp vào
 `PeftModel.from_pretrained()`. Thư mục `probe_only_adapter` của pilot optimized là
@@ -57,7 +67,7 @@ tra hỏng file, không xác thực người tạo.
 | Tham số | Mặc định | Ý nghĩa |
 | --- | --- | --- |
 | `--save-every-steps` | `5` | Số optimizer step hoàn thành giữa hai lần lưu |
-| `--keep-checkpoints` | `2` | Số bản local giữ lại; tối thiểu 2 |
+| `--keep-checkpoints` | `2` | Số bản local giữ lại; tối thiểu 1. Lượt train một epoch đầu dùng 1 để giới hạn dung lượng |
 | `--checkpoint-dir` | Theo script | Thư mục gốc chứa checkpoint |
 | `--resume-from` | Không có | Đường dẫn một thư mục `checkpoint-*`, hoặc `latest` |
 | `--checkpoint-hub-repo` | Không có | Repo HF **model private có sẵn**, dạng `owner/name` |
@@ -117,6 +127,12 @@ Tạo trước một repo **model private** và một token có quyền ghi vào
 secret bằng `--secret HF_TOKEN` của KRun. Không ghi giá trị token vào lệnh, docs,
 file nguồn hay log. Internet phải được bật cho upload/download.
 
+Epoch trainer cũng nhận repo **dataset private** qua
+`--checkpoint-hub-repo-type dataset`; khi tải lại dùng
+`fetch_training_checkpoint.py --repo-type dataset`. Các pilot giữ mặc định model.
+CPU preflight trong [hướng dẫn first run](first_run_epoch.md) kiểm tra quyền
+Secret của đúng notebook và quyền ghi repo trước khi dùng GPU.
+
 Thêm các tùy chọn sau vào lệnh KRun **đã định chạy**; đây chỉ là mẫu cấu hình,
 không phải yêu cầu chạy thêm pilot:
 
@@ -152,9 +168,13 @@ lại checkpoint.
 Nếu API đã commit nhưng mất phản hồi mạng, kiểm tra/tải lại bản remote mới nhất.
 Không thể đảm bảo backup nếu mạng hoặc quyền ghi lỗi trước lần upload đầu tiên.
 
-Chính sách giữ 2 bản **chỉ áp dụng local**. Các checkpoint và lịch sử commit trên
-Hub chưa được tự xóa, nên dung lượng repo tăng theo số lần lưu. Cần lập ngân sách
-lưu trữ riêng; không đưa token hoặc dữ liệu nhạy cảm vào repo công khai.
+`--keep-checkpoints` (`1` hoặc mặc định `2`) **chỉ áp dụng local**. Mặc định không
+xóa checkpoint và lịch sử Hub, nên dung lượng tăng theo số lần lưu. Riêng epoch
+trainer có tùy chọn phá hủy lịch sử **`--checkpoint-hub-keep-last 2`**, mặc định
+tắt, chỉ dành cho repo riêng và có sự cho phép rõ ràng của chủ repo. Nó giữ hai
+snapshot đầy đủ trong tree, xóa bản cũ rồi squash main; quota HF có thể mất tới
+36 giờ mới phản ánh phần được giải phóng. Xem
+[chính sách cloud của first run](first_run_epoch.md).
 
 ## Resume trong phiên mới
 
@@ -207,8 +227,14 @@ và lan truyền lỗi khi một rank không thể lưu. Test khác kiểm tra b
 sai identity, giữ bản trước khi upload lỗi, và commit/download Hub bằng transport
 mô phỏng. CLI `--help` không load model hoặc khởi chạy train.
 
-Chưa chạy kiểm chứng save/resume trên CUDA với PagedAdamW32bit hoặc upload thật lên
-Hub; kết quả CPU không chứng minh bit-exact trên T4/bitsandbytes. Tính năng này
-được bổ sung mà không gửi thêm job Kaggle/GPU. Các kết quả pilot GPU trước đây
-trong [Kaggle README](../cloud/kaggle/README.md) vẫn chỉ chứng minh những lần chạy
-đã đo, chưa chứng minh long-run training hoặc full-state resume trên GPU.
+Kết quả CPU không chứng minh bit-exact trên T4/bitsandbytes. Các kết quả GPU
+trong [Kaggle README](../cloud/kaggle/README.md) chỉ chứng minh những lần chạy
+đã đo, chưa chứng minh độ ổn định toàn epoch hoặc chất lượng model.
+
+Riêng epoch `first run` sau đó đã có bằng chứng resume và publish thật đến
+checkpoint 200 trên hai T4. Phiên version 15 bị host RAM OOM khi ghi checkpoint
+205; recovery 5 bổ sung giải phóng cache pinned trước save trên cả hai rank,
+giữ nguyên source identity và trạng thái tính toán. Recovery 6 thêm watchdog
+host OOM và log tiến độ mỗi phút. Giữ 1 bản local ở đây là trên ổ đĩa phiên
+Kaggle; chưa có cơ chế tự tải bản mới nhất về máy cá nhân. Xem chẩn đoán, giới hạn
+kiểm chứng và cell resume trong [first run epoch](first_run_epoch.md).

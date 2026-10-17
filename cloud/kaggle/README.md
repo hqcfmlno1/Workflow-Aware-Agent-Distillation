@@ -264,19 +264,34 @@ retry behavior, and quota/timeout limitations.
 
 CPU tests cover exact resume with dropout/optimizer/scaler/scheduler, real
 two-process Gloo resume and rank failure, and simulated Hub publication/download.
-CUDA/bitsandbytes resume and real Hub upload remain unverified. No additional
-Kaggle/GPU job was submitted to implement this feature.
+The subsequent `first run` epoch job has restored CUDA/bitsandbytes state and
+published complete checkpoints through step 200. This establishes operational
+resume/publication, not bit-exact CUDA equivalence or full-epoch stability.
 
 ## Baseline launch status
 
-Baseline SFT has not started. Full-history optimization probes measure actual
+Baseline SFT has started. `scripts/training/train_qlora_epoch.py` implements
+one deterministic shuffled epoch over all successful train-pool trajectories
+strictly below 30,000 tokens, using two T4 ranks and global batch size two. It
+saves after the first update, every five updates and on controlled stop, retaining
+one local checkpoint after successful publication. See the
+[first run guide](../../docs/first_run_epoch.md) for data preparation, complete logs,
+private Hub setup, optional destructive Hub retention, and resume instructions.
+The private Dataset repo `hqcfmlno1/QwenStacy-4b-coding` retains three checkpoints
+under `first-run`; the trainer retains one checkpoint on the Kaggle session disk.
+This does not automatically synchronize the personal computer.
+
+Full-history optimization probes measure actual
 training feasibility; the earlier 5,225-token result is not the current limit.
-The effective training count and a budget for the intended baseline remain
-unfinalized. Do not silently enable windows, select replacement tasks, or train
-a tiny subset as the baseline. Full-state resume on CUDA/bitsandbytes and
-full-corpus throughput remain unverified. Successful model partitioning is a single-process result.
-The separate one-batch DDP probe above does not establish a complete baseline
-trainer or verify distributed resume.
+CPU preparation completed with 11,527 eligible train-pool trajectories,
+256,253,032 tokens and 5,764 optimizer updates for one epoch. Across 145 completed
+updates (61–205), raw update time averaged 131.96 seconds; checkpoint saves
+averaged 40.43 seconds per save. Checkpoint 200 was confirmed durable. Version 15
+completed update 205 but hit host RAM OOM while saving it. Recovery version 6
+adds pinned-cache cleanup before save, an OOM watchdog and compact progress logs.
+Full-epoch completion, sustained memory stability and model quality remain
+unverified. Do not silently enable windows, select replacement tasks, or train
+a tiny subset as the baseline. See the first run guide for incident evidence.
 
 The requested endpoint is one epoch with fixed weights, followed by evaluating
 the final checkpoint on SWE-bench Verified 500 under matched base/adapter settings.
