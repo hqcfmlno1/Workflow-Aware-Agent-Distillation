@@ -101,7 +101,9 @@ The formula defines the objective over complete represented trajectories. If tra
 
 $$q_{n,s}=\frac{\sum_{i\in I(n,s)}w_{n,i}\ell_{n,i}}{D_n},\qquad L_n=\sum_s q_{n,s}.$$
 
-Independently normalizing chunks and averaging changes the objective. For N trajectories and K chunks, uniform chunk sampling with sample loss (K/N) times q(n,s) is an unbiased estimator of the trajectory mean. Other sampling distributions require corresponding probability weights. Equivalence assumes identical conditioning context. Shorter context or dropped targets changes the training problem and must be documented. Context length, packing, and window construction remain implementation decisions.
+Independently normalizing chunks and averaging changes the objective. For N trajectories and K chunks, uniform chunk sampling with sample loss (K/N) times q(n,s) is an unbiased estimator of the trajectory mean. Other sampling distributions require corresponding probability weights. Equivalence assumes identical conditioning context. Shorter context or dropped targets changes the training problem and must be documented.
+
+The initial remote run will retain complete trajectories that fit a measured training context limit and exclude longer trajectories from that run. Keep excluded originals for later work; do not truncate histories, silently replace excluded tasks, or enable sliding windows. The context threshold and resulting training count must be recorded before baseline training. Splitting a trajectory into next-step examples with full preceding history does not shorten late-step inputs: the input prefix still grows with each step. Such examples therefore need their own context policy.
 
 Implementation requirements:
 
@@ -113,9 +115,11 @@ Implementation requirements:
 
 ## 7. Training scope and checkpointing
 
-The agreed baseline trains on **4,000 trajectories for one epoch**, with fixed loss weights. General-data replay is not part of this initial baseline. One epoch does not establish that forgetting is absent or that training fits the compute budget.
+The rule-selected source baseline contains **4,000 trajectories**. The requested training endpoint is **one epoch** over the explicitly finalized context-fitting subset, with fixed loss weights. Filtering changes the effective training count; report that count separately from the 4,000 source trajectories. General-data replay is not part of this initial baseline. One epoch does not establish that forgetting is absent or that training fits the compute budget.
 
 Save full training checkpoints: adapter, optimizer, scheduler, global step, and data/RNG state. Record consumed examples to prevent accidental replay on resume. Loading adapter weights alone starts a new optimization stage. Any future continuation would require an explicit data and learning-rate schedule; no dataset expansion or second epoch is currently planned.
+
+The optimized QLoRA and one-batch DDP pilots implement this policy with per-rank optimizer/GradScaler/RNG state, an explicit next-data cursor, atomic checksummed saves, an interval of five completed updates, two retained local copies, and optional private Hub backup. CPU single-process and two-rank Gloo tests cover exact continuation; CUDA/bitsandbytes resume remains unverified. The DDP pilot still performs just one total update and forces its final save. The [current configuration](qlora_current_config.md) uses r=32/alpha=64 and PagedAdamW32bit; earlier GPU results used r=16/alpha=32 and PagedAdamW8bit. See the [checkpoint/resume guide](training_checkpoint_resume.md) for configuration, recovery, and session-loss limitations. This infrastructure does not constitute the complete baseline trainer.
 
 ## 8. Evaluation and checkpoint policy
 
@@ -136,11 +140,11 @@ Repeatedly selecting weights, checkpoints, or extensions using Verified results 
 5. Chunk contributions reconstruct full-trajectory loss under identical context. Sampling, accumulation, and one/two-GPU reduction preserve the objective.
 6. A remote backward smoke test produces finite gradients and updates adapters. Resume preserves optimizer/scheduler state and data position.
 
-These are future trainer requirements, not claims that trainer checks have run. This documentation update performs no training, inference, or benchmark execution.
+The remote numerical pilot checks weighted CE and gradients against a full-logit reference. Later checks cover cross-device vocabulary projection, checkpoint dropout RNG on two GPUs, and internally blocked Gated DeltaNet output/state/input gradients under nested checkpointing and CPU offload, including GPU FP16 autocast. Optimized QLoRA completed two finite updates at 16,320 tokens on both one T4 and a partitioned pair, before OOM at 32,766 tokens in the unblocked implementation. Internal compute blocking preserves full histories and state gradients; the [Kaggle instructions](../cloud/kaggle/README.md) record subsequent results. These are feasibility probes, not full-state resume checks. Baseline SFT and benchmark evaluation have not started.
 
 ## 10. Data status and provenance
 
-The baseline contains 4,000 trajectories from distinct tasks that originally each had at least two successful attempts. Files are under `data/processed/mini_swe_agent_rule_baseline_4000/`, containing normalized messages, rendered text, token counts, and action candidates. **Training labels, token group masks, and a weighted-loss trainer are not implemented.**
+The baseline contains 4,000 trajectories from distinct tasks that originally each had at least two successful attempts. Files are under `data/processed/mini_swe_agent_rule_baseline_4000/`, containing normalized messages, rendered text, token counts, and action candidates. CPU token-group preparation is complete under `data/processed/weighted_sft_tokens_4000/`: all 4,000 renders, token counts, target counts, and binary checksums were verified, with no overlap with the 50 held-out tasks. A remote chunked weighted-loss implementation and full-history QLoRA memory probes are available. The effective training count, complete baseline trainer, CUDA full-state resume verification, and full-corpus runtime budget are not finalized. See [Kaggle instructions](../cloud/kaggle/README.md) for commands and measured results.
 
 The baseline has 191,891,858 serialized tokens and a median of 40,715 tokens per trajectory. These are input-text counts, not supervised-target counts or measured runtime. Reducing loss weights does not remove context computation. Success-only SFT does not guarantee recovery from student errors or improvement over base. Exact teacher-token CE gives no explicit credit for alternative valid commands, and successful teachers can contain mistakes.
 

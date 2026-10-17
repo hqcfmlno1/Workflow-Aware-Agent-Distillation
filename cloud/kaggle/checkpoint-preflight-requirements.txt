@@ -1,0 +1,2 @@
+# CPU only: auth_check(write=True) verifies content-write permission without a commit.
+huggingface_hub==1.33.0

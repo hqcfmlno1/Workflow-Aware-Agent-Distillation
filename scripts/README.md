@@ -10,5 +10,14 @@ Các thư mục dành cho pipeline mới:
 - `cloud/`: chuẩn bị payload và khởi chạy batch job qua KRun.
 
 Entrypoint dữ liệu: `python scripts/data/prepare_action_focused_sft.py` (CPU, tokenizer only).
-Xem [pipeline phase 1 và metric](../docs/action_focused_sft_phase1.md). Các entrypoint training,
-evaluation và cloud chưa được triển khai; máy local không chịu trách nhiệm fine-tune.
+Xem [pipeline phase 1 và metric](../docs/action_focused_sft_phase1.md).
+`python -m scripts.data.prepare_epoch_sft` chuẩn bị toàn bộ successful train-pool
+trajectory dưới 30k token. `training/train_qlora_epoch.py` chạy một epoch DDP
+remote trên hai T4; [hướng dẫn first run](../docs/first_run_epoch.md) mô tả log,
+checkpoint giới hạn dung lượng và backup HF. Đã xác nhận resume và publish
+checkpoint 200 trên hai T4; chưa hoàn tất epoch hoặc đánh giá chất lượng.
+Máy local không chịu trách nhiệm fine-tune.
+Các pilot QLoRA chạy remote qua KRun đã có checkpoint định kỳ và resume; xem
+[hướng dẫn checkpoint](../docs/training_checkpoint_resume.md). Công cụ CPU
+`training/fetch_training_checkpoint.py` tải bản mới nhất từ repo HF private để
+gắn vào phiên Kaggle tiếp theo.
