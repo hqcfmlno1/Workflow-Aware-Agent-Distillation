@@ -221,7 +221,8 @@ def test_memory_telemetry_stays_in_file_without_flooding_console(monkeypatch, tm
     assert records[1]['before']['pinned']['allocated_bytes.current'] == 999
 
 
-def test_worker_startup_installs_both_hooks_and_suppresses_hub_progress(tmp_path):
+@pytest.mark.parametrize('adaptive', [False, True])
+def test_worker_startup_installs_both_hooks_and_suppresses_hub_progress(tmp_path, adaptive):
     import os
     import subprocess
     import sys
@@ -241,9 +242,14 @@ def test_worker_startup_installs_both_hooks_and_suppresses_hub_progress(tmp_path
          'assert torch.autograd.graph.save_on_cpu.__enter__._first_run_host_cache_cleanup; '
          'assert CheckpointManager.save._first_run_checkpoint_cleanup; '
          'assert os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] == "1"; '
+         'from workflow_distillation import qlora_runtime; '
+         'assert bool(getattr(qlora_runtime.build_replica, '
+         '"_first_run_adaptive_execution", False)) == '
+         '(os.environ.get("FIRST_RUN_ADAPTIVE_MEMORY") == "1"); '
          'print("HOOKS_READY")'],
         env={**os.environ, 'PYTHONPATH': f'{hooks}:{tmp_path}:{ROOT / "src"}',
              'FIRST_RUN_HOST_CACHE_RECOVERY': '1', 'LOCAL_RANK': '0',
+             'FIRST_RUN_ADAPTIVE_MEMORY': str(int(adaptive)),
              'FIRST_RUN_RECOVERY_LOG_DIR': str(tmp_path / 'logs')},
         capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
@@ -298,7 +304,9 @@ def test_progress_summary_counts_completed_updates_and_confirmed_checkpoints(
 
 
 @pytest.mark.parametrize('orphan_workers', [False, True])
-def test_oom_watchdog_exits_and_kills_the_owned_torchrun_group(tmp_path, orphan_workers):
+@pytest.mark.parametrize('failure', ['host_oom', 'rank_failed'])
+def test_oom_watchdog_exits_and_kills_the_owned_torchrun_group(
+        tmp_path, orphan_workers, failure):
     """A dead rank must not leave a live peer consuming quota after a new OOM kill."""
     import os
     import signal
@@ -324,7 +332,7 @@ def test_oom_watchdog_exits_and_kills_the_owned_torchrun_group(tmp_path, orphan_
         'from host_memory_recovery import install_torchrun_logs,start_monitor,_OWNED_PROCESSES\n'
         'os.environ["FIRST_RUN_MONITOR_OWNER_PID"]=str(os.getpid())\n'
         'install_torchrun_logs(Path("logs"))\n'
-        'start_monitor(interval=.02,cgroup_root=Path("cgroup"))\n'
+        'start_monitor(interval=.02,cgroup_root=Path("cgroup"),progress_dir=Path("progress"))\n'
         'child=subprocess.Popen([sys.executable,"-m","torch.distributed.run","--standalone",'
         '"--nproc_per_node=2","worker.py"],start_new_session=True)\n'
         'Path("torchrun.pid").write_text(str(child.pid))\n'
@@ -355,7 +363,13 @@ def test_oom_watchdog_exits_and_kills_the_owned_torchrun_group(tmp_path, orphan_
                 # The OOM victim may be torchrun rather than a worker. Its peers
                 # have separate sessions and must still be stopped after reparenting.
                 os.kill(int((tmp_path / 'torchrun.pid').read_text()), signal.SIGKILL)
-            events.write_text('oom 1\noom_kill 2\n')
+            if failure == 'host_oom':
+                events.write_text('oom 1\noom_kill 2\n')
+            else:
+                progress = tmp_path / 'progress'
+                progress.mkdir()
+                (progress / 'rank0.jsonl').write_text(
+                    '{"event":"failed","rank":0,"error_type":"OutOfMemoryError"}\n')
             assert parent.wait(timeout=5) == 86
             for pid in worker_pids:
                 deadline = time.monotonic() + 3
@@ -368,7 +382,9 @@ def test_oom_watchdog_exits_and_kills_the_owned_torchrun_group(tmp_path, orphan_
                         break
                     assert time.monotonic() < deadline, 'Worker survived the OOM watchdog'
                     time.sleep(.02)
-            assert 'host_oom_detected' in (tmp_path / 'console.log').read_text()
+            expected_event = ('host_oom_detected' if failure == 'host_oom'
+                              else 'rank_failure_detected')
+            assert expected_event in (tmp_path / 'console.log').read_text()
         finally:
             if parent.poll() is None:
                 os.killpg(parent.pid, signal.SIGKILL)

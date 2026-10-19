@@ -1,4 +1,4 @@
-"""Resume first run with unchanged training sources plus host-cache hygiene.
+"""Resume checkpoint375 with a fixed, strictly below28k untrained suffix.
 
 Run from the private recovery-code Kaggle dataset, in the existing GPU notebook.
 """
@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -16,6 +17,7 @@ from pathlib import Path
 ARCHIVE_SHA256 = 'c4f05b86a83808db2ca03a25acb2428f44d65e04ab704729e327d25a1a0be9b2'
 INDEX_SHA256 = 'd0103eb4eaa2aed12e0d85cc9b952b54ee6a0c9d6536c365fd2a67296a7ccd0e'
 SCRIPT_SHA256 = 'e5d71b7cb9cca971d1ce5d2195b1a9da94b1d20f319f1d8fb9f64959940cc22a'
+PLAN_SHA256 = '42d0a70cec3f3688da0064524cc5a6e18919db1ac8f16299c37109648db261a3'
 
 
 def sha256(path):
@@ -24,6 +26,22 @@ def sha256(path):
         for block in iter(lambda: stream.read(1024 * 1024), b''):
             digest.update(block)
     return digest.hexdigest()
+
+
+def prepare_continuation(assets, project, index, checkpoint):
+    """Validate the fixed schedule and resume boundary before model allocation."""
+    from filtered_continuation import check_resume_manifest, load_plan, validate_plan
+
+    plan = load_plan(assets / 'continuation-plan.json', expected_sha256=PLAN_SHA256)
+    validate_plan(index, plan)
+    kind = check_resume_manifest(checkpoint, plan)
+    entrypoint = project / 'scripts/training/train_qlora_filtered.py'
+    shutil.copyfile(assets / 'train_qlora_filtered.py', entrypoint)
+    selection = {k: v for k, v in plan.items() if k not in ('ordered_indices', 'parent')}
+    selection['parent_progress'] = plan['parent']['progress']
+    selection['resume_kind'] = kind
+    print(json.dumps({'event': 'continuation_plan_verified', **selection}), flush=True)
+    return entrypoint, selection
 
 
 def run():
@@ -41,7 +59,7 @@ def run():
 
     os.environ['HF_TOKEN'] = UserSecretsClient().get_secret('HF_TOKEN')
     print(json.dumps({'run_name': 'first run', 'status': 'secret_loaded',
-                      'recovery': 'host_cache_cleanup_resume'}), flush=True)
+                      'recovery': 'filtered_suffix_below28000'}), flush=True)
     project.mkdir(parents=True)
     with tarfile.open(archive, 'r:gz') as stream:
         stream.extractall(project, filter='data')
@@ -62,6 +80,7 @@ def run():
     checkpoint = download_latest_checkpoint(
         'hqcfmlno1/QwenStacy-4b-coding', project / 'hub-recovery',
         prefix='first-run', repo_type='dataset')
+    entrypoint, selection = prepare_continuation(assets, project, index, checkpoint)
     saved = json.loads((checkpoint / 'manifest.json').read_text())
     print(json.dumps({'event': 'recovery_checkpoint_verified',
                       'progress': saved['progress'], 'checkpoint': checkpoint.name}), flush=True)
@@ -71,22 +90,44 @@ def run():
               'original_script_sha256': SCRIPT_SHA256,
               'operational_hooks': {name: sha256(assets / name) for name in
                                     ['sitecustomize.py', 'host_memory_recovery.py',
-                                     'recovery_diagnostics.py']},
+                                     'recovery_diagnostics.py', 'adaptive_memory.py']},
+              'continuation_assets': {name: sha256(assets / name) for name in
+                                      ['filtered_continuation.py', 'train_qlora_filtered.py',
+                                       'continuation-plan.json']},
+              'data_selection': selection,
               'numerical_sources_modified': False, 'checkpoint_progress': saved['progress'],
+              'execution_policy': {
+                  'backend': 'manual_data_parallel', 'ddp_reducer_created': False,
+                  'ddp_bucket_bytes': 0,
+                  'modes': ['parallel', 'serial'], 'host_reserve_gib': 3,
+                  'activation_estimate_margin': 1.15,
+                  'gradient_reduction_both_modes': 'scaled SUM/world_size before unscale',
+                  'gradient_reduction_order_may_differ': True,
+                  'global_batch_size': 2, 'optimizer_updates_per_batch': 1,
+                  'gpu_memory_safety_guaranteed': False,
+              },
               'change': 'empty inactive pinned cache before forward and checkpoint; '
                         'full file telemetry, one-minute progress summaries, '
-                        'abort owned torchrun groups on new host OOM kills',
-              'cause_status': 'version 15 reached host cgroup limit and oom_kill=1 '
-                              'during checkpoint 205; retained pinned cache implicated'}
+                        'abort owned torchrun groups on new host OOM kills; '
+                        'abort on rank failed events; choose parallel/serial before '
+                        'retaining host activations; broadcast adapters and average '
+                        'gradients without constructing a DDP reducer; preserve consumed '
+                        'prefix at375 and filter only pending full trajectories below28000',
+              'cause_status': 'recovery9 completed371-376 and published375; '
+                              'serial rank0 backward at377 CUDA OOM on29991 tokens; '
+                              'host oom_kill counter stayed zero'}
     (log_dir / 'recovery-manifest.json').write_text(json.dumps(record, indent=2) + '\n')
     previous_pythonpath = os.environ.get('PYTHONPATH')
     extra_pythonpath = os.pathsep + previous_pythonpath if previous_pythonpath else ''
     env = {**os.environ, 'FIRST_RUN_HOST_CACHE_RECOVERY': '1',
+           'FIRST_RUN_ADAPTIVE_MEMORY': '1',
+           'FIRST_RUN_CONTINUATION_PLAN': str(assets / 'continuation-plan.json'),
+           'FIRST_RUN_CONTINUATION_PLAN_SHA256': PLAN_SHA256,
            'PYTHONFAULTHANDLER': '1',
            'FIRST_RUN_RECOVERY_LOG_DIR': str(log_dir),
            'PYTHONPATH': str(assets) + os.pathsep + str(project / 'src') +
                         extra_pythonpath}
-    # The original launcher/worker sources and strict checkpoint identity remain intact.
+    # Exact parent migration; subsequent checkpoints bind the fixed plan and new entrypoint.
     code = subprocess.call([sys.executable, '-u', str(entrypoint), *base_args,
                             '--resume-from', str(checkpoint)], cwd=project, env=env)
     print(json.dumps({'event': 'recovery_process_finished', 'exit_code': code}), flush=True)

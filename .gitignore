@@ -10,9 +10,6 @@ __pycache__/
 .ipynb_checkpoints/
 dist/
 
-# Generated local test artifact not included in the research branch
-tests/test_omnicode_collector.py
-
 # Generated experiment artifacts
 /data/*
 !/data/README.md
@@ -25,9 +22,8 @@ wandb/
 .cache/
 huggingface/
 
-# Local benchmark checkout and generated teacher data
+# Local benchmark/harness checkouts
 external/
-teacher_dataset/
 
 # Local agent planning artifacts
 docs/superpowers/

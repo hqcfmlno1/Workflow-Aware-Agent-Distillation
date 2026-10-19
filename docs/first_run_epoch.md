@@ -1,16 +1,25 @@
 # First run: QLoRA một epoch trên hai T4
 
-Tên trong log: **`first run`**. Entry point:
-`scripts/training/train_qlora_epoch.py`. Cấu hình số học nằm tại
+Tên trong log: **`first run`**. Trainer gốc:
+`scripts/training/train_qlora_epoch.py`; continuation đã lọc dùng
+`scripts/training/train_qlora_filtered.py`. Cấu hình số học nằm tại
 [`qlora_current_config.md`](qlora_current_config.md) và
 `src/workflow_distillation/qlora_runtime.py`.
 
-Trạng thái xác nhận ngày 2026-10-17: cấu hình r=32/alpha=64, PagedAdamW32bit đã
-resume trên hai T4 và publish checkpoint 200. Version 15 hoàn tất update 205
-nhưng host RAM OOM lúc ghi checkpoint; recovery dataset **version 6** bổ sung
-dọn cache pinned trước save, watchdog OOM và log tiến độ gọn. Chưa hoàn tất
-epoch, chưa đánh giá chất lượng hoặc chứng minh mọi trajectory dưới 30k đều
-vừa bộ nhớ. Các mục điều tra bên dưới ghi lại trạng thái tại từng thời điểm.
+Trạng thái xác nhận ngày 2026-10-18: cấu hình r=32/alpha=64, PagedAdamW32bit đã
+resume trên hai T4 và publish checkpoint **375** (750 trajectory). Recovery 6
+đã dọn cache nhưng vẫn host RAM OOM trong update **371**, với hai trajectory
+29.671 và 26.737 token. Recovery **version 8** thêm lịch song song/lần lượt theo
+RAM; lượt resume tiếp theo báo CUDA OOM trong MLP/LoRA dropout ở backward.
+Recovery **version 9** bỏ DDP reducer/bucket ngay khi khởi tạo và đã hoàn tất
+update 371–376 trên CUDA; checkpoint 375 upload thành công. Update 377 lỗi
+CUDA OOM trong backward rank 0 với trajectory 29.991 token; rank 1 có 28.704
+token, lịch serial, host `oom_kill=0`. Watchdog dừng workers, exit 86.
+Recovery **version 10** giữ backend này và lọc **chỉ phần chưa train** từ mốc
+375 xuống **dưới 28.000 token**. Lịch mới gồm 9.966 trajectory/4.983 update.
+Chưa hoàn tất epoch, chưa đánh giá chất lượng hoặc chứng minh mọi sample dưới
+28k đều vừa bộ nhớ. Các mục điều tra bên dưới ghi lại trạng thái từng thời điểm;
+hướng dẫn hiện tại ở mục **Recovery 10** cuối tài liệu.
 
 ## Dữ liệu và giới hạn epoch
 
@@ -620,3 +629,232 @@ Save Version → Save & Run All một lần. Nếu đã có lượt GPU đang ch
 code mới không tự áp dụng vào lượt đó; không tự mở thêm phiên song song.
 Chế độ Draft có thể giữ GPU session sau khi cell lỗi, cần Stop Session để
 thu hồi tài nguyên; watchdog dừng tiến trình train, không gọi API hủy Kaggle.
+
+### Recovery 8: kiểm tra RAM trước batch, tự chọn song song hoặc lần lượt
+
+Mục này ghi lại bản 8 đã xuất bản; bản thay thế là **Recovery 9** ở cuối tài liệu.
+
+Phiên recovery 6 đã lưu/publish checkpoint 370 lúc `2026-10-17T21:40:57Z`
+(04:40:57 ngày 18/10, UTC+7). Hai rank tiếp tục update 371 với 29.671 và
+26.737 token. Pinned allocator đã về 0 trước forward nhưng RAM tiếp tục tăng
+do activation đang dùng. Cgroup chạm giới hạn 30 GiB, `oom_kill=1`;
+watchdog thoát mã 86 lúc `21:41:35Z`. Checkpoint 370 có đủ adapter, state hai
+rank và manifest `complete=true` trong Output Kaggle. Payload trọng số của
+bản này chưa được tải về/hash lại trên máy cá nhân trong lượt điều tra.
+
+`cloud/kaggle/recovery/adaptive_memory.py` được cài qua `sitecustomize.py`
+với `FIRST_RUN_ADAPTIVE_MEMORY=1`. Trước decoder forward, hai rank đã dọn cache
+và trao đổi độ dài sample; rank 0 đọc giới hạn RAM cgroup, quyết định chế độ
+rồi broadcast để mọi rank dùng cùng một lịch thực thi:
+
+- Ước lượng theo size class power-of-two của pinned allocator, hidden width
+  2.560 FP16. Envelope ban đầu là 36 block và 64 MiB overhead mỗi rank,
+  nhân 1,15. Log recovery 6 quan sát được mức khoảng 4,5 GiB/rank tăng lên
+  9 GiB khi input vượt khoảng 26.214 token. Không dùng tổng token đơn thuần.
+- Baseline giữ anonymous memory, shmem, kernel, dirty/writeback; chỉ trừ
+  phần file cache sạch có thể reclaim. `shmem` nằm trong `file`, không được
+  trừ nhầm. Thiếu thống kê thì tính bảo thủ; thiếu giới hạn RAM thì từ chối.
+- Dự phòng tối thiểu **3 GiB hoặc 10% giới hạn RAM**, lấy số lớn hơn. Nếu
+  baseline + activation hai rank + dự phòng vừa RAM thì chọn `parallel`.
+  Nếu chỉ baseline + activation của rank lớn nhất + dự phòng vừa thì chọn
+  `serial`. Nếu cả serial không vừa thì báo lỗi trước forward, giữ checkpoint
+  đã commit gần nhất; không cố ghi checkpoint trong lúc thiếu headroom.
+- Với serial, rank 0 forward/backward rồi dọn pinned cache trước khi rank 1
+  forward/backward. Nhánh này gọi cùng decoder module trong `DDP.no_sync`,
+  tránh collective rebuild bucket ngầm trong `DDP.forward` gây deadlock.
+  Khi cả hai hoàn tất, all-reduce scaled gradients SUM/2 trước unscale,
+  clipping và **một** optimizer update. Batch lẻ vẫn dùng hệ số padding 2/0.
+- Nhánh parallel giữ DDP forward/backward hiện tại. Calibration quan sát
+  `allocated_bytes.current` trước cleanup; chỉ tăng envelope khi cần, không
+  tự hạ ngưỡng sau một batch nhỏ. Không dùng counter `active_bytes.current`
+  bất thường từ runtime này để suy ra dung lượng khả dụng.
+
+Giữ nguyên hai sample trong mỗi batch, thứ tự seed 42, toàn bộ context, dtype,
+LoRA r=32, loss và optimizer. Original archive/trainer/checkpoint identity vẫn
+giữ nguyên; hash hook mới và lịch reduction được ghi trong recovery manifest.
+Checkpoint format, state optimizer/scaler và RNG rank không đổi. Chỉ thứ tự
+thực hiện và gradient reduction có thể khác, không hứa bit-exact CUDA.
+
+Console ghi `batch_execution_mode` với step, mode, độ dài, baseline, estimates,
+reserve và lý do. Full event vẫn vào file `memory-<pid>.jsonl`. Watchdog OOM và
+cleanup trước checkpoint của recovery 6 được giữ. Estimator không bảo đảm
+không OOM: RAM ngoại sinh, allocator hoặc một sample vượt VRAM vẫn có thể lỗi;
+serial không tăng VRAM của từng GPU. Chưa có kết quả throughput hoặc GPU thực
+tế của recovery 8. Không bắt OOM rồi tự retry vì kernel có thể SIGKILL worker.
+
+Test hai process Gloo thật so sánh với DDP chuẩn qua các chuỗi mode đổi qua lại,
+bao gồm serial ngay từ đầu/sau resume, dropout RNG, state optimizer/scaler,
+batch cuối lẻ và việc cả hai rank từ chối khi serial không đủ headroom. Test
+policy riêng bao gồm cặp 29.671/26.737 token gây lỗi và bước nhảy size class.
+CPU không thay thế kiểm chứng PyTorch 2.11/CUDA T4.
+
+Sau khi version 8 được publish/ready, dùng cùng notebook và Secret `HF_TOKEN`,
+giữ dataset epoch, đổi cell bootstrap thành:
+
+```python
+import kagglehub, runpy
+from pathlib import Path
+
+bundle = Path(kagglehub.dataset_download(
+    "cuonghoangquoc/first-run-memory-recovery-20261017/versions/8"))
+runpy.run_path(str(bundle / "resume_first_run.py"), run_name="__main__")
+```
+
+Resume tải checkpoint latest đã kiểm hash. Nếu latest vẫn là 370, batch đầu là
+371 và phải thấy event chọn serial với headroom tương tự lần điều tra. Phiên
+GPU mới vẫn cần người dùng khởi chạy trong UI để giữ liên kết Secret; không
+ghi lại notebook qua API, không chạy song song Draft và Saved Version.
+
+### Recovery 9: bỏ DDP bucket, đồng bộ gradient thủ công
+
+Lượt resume recovery 8 báo `CUDA OutOfMemoryError` tại MLP/LoRA dropout trong
+backward: cần thêm 522 MiB, GPU 0 còn 468,81 MiB trống. Đây là lỗi VRAM, khác
+host RAM OOM của recovery 6. Log r32/PagedAdamW32bit trước đó đã hoàn tất sample
+29.974 token ở update 72 (cùng sample 24.013 token), peak allocated 13,82 GiB
+trên rank 1; update 201 hoàn tất tổng 58.243 token (29.580/28.663). Không thể
+quy lỗi chỉ cho độ dài hoặc suy rằng cấu hình mới chưa từng chạy gần 30k.
+
+Recovery 8 giữ đối tượng DDP để đổi lịch, nhưng `no_sync()` chỉ tắt đồng bộ,
+không giải phóng reducer/bucket. Nhánh serial có thể tạo gradient riêng; một
+bộ gradient FP32 của 64.929.792 tham số chiếm 247,69 MiB/GPU. CPU characterization
+xác nhận khác biệt chia sẻ storage; chưa có CUDA profiling để kết luận đây
+là toàn bộ nguyên nhân OOM.
+
+Recovery 9 thay cách thực thi, không chia MLP hoặc đổi cấu hình số học:
+
+- Giữ hai model replica. Chặn đúng một lần constructor DDP trong lúc build,
+  trả về module thường trước khi `DDP.__init__` chạy. Class DDP và các alias
+  import vẫn là type hợp lệ; khôi phục `__new__` trong `finally`. Không tạo
+  reducer/bucket, kể cả tạm thời. Frozen weights được load từ cùng revision đã
+  kiểm hash; adapter được broadcast từ rank 0 sau khi kiểm signature hai rank.
+- Giữ policy RAM và lịch parallel/serial của bản 8. Cả hai lịch đều all-reduce
+  từng scaled gradient SUM/2 trước `GradScaler.unscale_`, clipping và một update.
+  Rank 1 chỉ bắt đầu serial forward sau rank 0 backward và cleanup. Batch lẻ
+  giữ đúng hệ số sample/padding 2/0.
+- Giữ nguyên archive, trainer, index, identity config, rank32, dtype, optimizer,
+  full context, thứ tự dữ liệu, checkpoint format, optimizer/scaler và RNG.
+  Giữ các field DDP trong identity gốc để kiểm checkpoint; backend hiệu lực ghi
+  riêng là `manual_data_parallel`. Thứ tự reduction có thể khác, không hứa
+  bit-exact CUDA. Resume tải latest HF, không khởi tạo lại lượt train.
+- Event `manual_replica_initialized` và `batch_execution_mode` ghi
+  `ddp_bucket_bytes=0`. Watchdog của launcher kiểm tra rank log mỗi 10 giây;
+  khi có event `failed` (kể cả CUDA OOM), ghi `rank_failure_detected`, dừng
+  process train thuộc phiên và thoát 86, không đợi NCCL timeout. Không gọi API
+  huỷ Kaggle; nếu Draft còn giữ GPU sau cell lỗi cần Stop Session trên UI.
+
+Test hai process Gloo chạy cả hai thứ tự parallel/serial, nonreentrant checkpoint,
+CPU saved inputs, dropout, odd batch, đồng bộ adapter lúc init từ hai seed khác
+nhau, update/loss/optimizer/scaler/RNG so với DDP chuẩn và load checkpoint của
+DDP chuẩn. Test cấm `DDP.__init__`, kiểm việc khôi phục constructor sau thành
+công/thất bại, thiếu gradient, signature khác nhau và watchdog dừng peer khi
+rank lỗi. Đây là bằng chứng CPU, không thay cho kiểm chứng T4/NCCL/PagedAdamW.
+Không bảo đảm mọi batch vừa VRAM; vẫn cần quan sát batch 371 khi resume thật.
+
+**Cập nhật Input trước khi Save & Run All:** trong cùng notebook, cập nhật
+`first-run-memory-recovery-20261017` lên **dataset version 9**. Nếu không có nút
+update thì gỡ riêng recovery Input và thêm lại bản mới. Giữ Input epoch và
+Secret `HF_TOKEN`. Background session không thể tự attach version mới; đổi
+chuỗi `versions/9` trong code khi Input vẫn v6/v8 sẽ lỗi trước train.
+
+Cell khởi chạy đọc trực tiếp Input đã mount và từ chối nếu chưa đúng bản 9:
+
+```python
+from pathlib import Path
+import hashlib, runpy
+
+bundle = Path('/kaggle/input/datasets/cuonghoangquoc/first-run-memory-recovery-20261017')
+expected = {
+    'adaptive_memory.py': 'a9d7225aa7c7edffc84552568af5988f14a2d63b739744628d0c83145a25d174',
+    'resume_first_run.py': '8f29982de9385037114b468918f1b2e96f8760e3b642a58087d6535e18788172',
+}
+for name, sha in expected.items():
+    path = bundle / name
+    if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != sha:
+        raise RuntimeError('Recovery Input chưa đúng version 9; cập nhật Input trước.')
+runpy.run_path(str(bundle / 'resume_first_run.py'), run_name='__main__')
+```
+
+Chỉ khởi chạy một phiên bằng **Save Version → Save & Run All**, không chạy thêm
+Draft song song. Nếu latest vẫn checkpoint 370, batch tiếp theo là 371. Khi
+thấy `manual_replica_initialized` với `ddp_bucket_bytes=0`, backend mới đã cài;
+chỉ event `step` 371 mới xác nhận update đó thành công.
+
+### Recovery 10: lọc suffix chưa train dưới 28k
+
+Người dùng chọn giữ context nguyên vẹn và bỏ bớt trajectory dài ở **phần chưa
+train**. Mốc chuyển là checkpoint **375**, manifest SHA-256:
+`af444f804ca64809bf2a8e6b7e0a3f7b94d10aad09b2d03de8f8f50ebad1a6e5`.
+Update 376 đã chạy nhưng chưa checkpoint nên không được tính là tiến độ bền vững.
+
+| Phần dữ liệu | Số trajectory |
+| --- | ---: |
+| Đã train, giữ nguyên prefix seed 42 | 750 |
+| Chưa train tại mốc 375 | 10.777 |
+| Chưa train, giữ lại vì `<28000` | 9.216 |
+| Chưa train, bỏ vì `>=28000` | 1.561 |
+| Toàn lịch continuation, gồm prefix | 9.966 |
+
+Tổng lịch mới **210.967.717 token**, **4.983 update**, trong đó đã hoàn tất 375 và
+còn **4.608 update**. Bước tiếp theo là **376**. Prefix vẫn có 105 trajectory
+`>=28000` đã train; không lọc lại hoặc replay prefix. Chỉ số progress và mẫu số
+trong log dùng lịch mới. Đây là một lượt qua tập đã lọc, không phải hoàn thành
+đủ 11.527 trajectory của epoch gốc.
+
+`cloud/kaggle/recovery/continuation-plan.json` cố định thứ tự source index:
+750 hàng đầu của shuffle seed 42, sau đó các hàng suffix đủ điều kiện theo đúng
+thứ tự tương đối cũ, ghép thành batch 2. Không shuffle lại, không cắt trajectory,
+không đổi token/group/denominator, không ghi lại binary 1,2 GiB. `FilteredDataset`
+là view dùng offset gốc; vẫn kiểm hash và tính toàn vẹn dataset nguồn.
+Hash danh sách trajectory ID theo thứ tự:
+`03fc2368bf4a287db13923845e929a75e0363ad32840008596cbc615fc257c69`.
+Plan file SHA-256:
+`42d0a70cec3f3688da0064524cc5a6e18919db1ac8f16299c37109648db261a3`.
+
+Entrypoint mới import trainer gốc nguyên vẹn. Migration chỉ nhận đúng parent375
+đã pin hash, kiểm identity số học/package/config và **mọi payload**, rồi load
+adapter, optimizer, GradScaler, RNG từng rank và cursor bằng loader gốc. Identity
+checkpoint mới bổ sung plan hash, ngưỡng, parent hash và implementation hash;
+resume các lần sau dùng identity mới nghiêm ngặt. Plan không được tính lại từ
+checkpoint latest. Sai plan/source/config/package phải dừng trước train; preflight
+identity chạy trước model allocation.
+
+Giữ backend manual data parallel, LoRA r32/alpha64, FP16 compute, FP32 adapter và
+PagedAdamW32bit. Không dùng MLP chunking. Checkpoint mỗi 5 update, 1 local/3 HF,
+cùng prefix `first-run` để không nhân đôi storage. Publisher cho phép duy nhất
+**đúng parent375 → đúng toàn bộ child identity** dưới cùng prefix; các mismatch
+khác bị từ chối. Commit chứa cả payload/manifest/latest, có parent-commit guard;
+prune và squash giữ nguyên chính sách cũ. Sau resume từ375, save định kỳ tiếp là
+380; dừng có kiểm soát có thể save sớm. Nếu chết trước save mới, resume lại375.
+
+CPU tests kiểm thứ tự và biên `<28000`, tensor dữ liệu giữ nguyên, không replay
+prefix, state model/AdamW/GradScaler/RNG khớp qua migrate→save→resume, payload lỗi
+bị từ chối và fake HF kiểm parent republish→child publish→retention/retry/download.
+Kiểm entrypoint với archive gốc và package metadata mô phỏng từ parent đã tới
+parser thành công. Những kiểm tra này không chứng minh T4 hết OOM; không mở thêm
+GPU pilot cho thay đổi bộ lọc.
+
+**Cách chạy:** trong [cùng notebook](https://www.kaggle.com/code/cuonghoangquoc/workflow-aware-agent-dis-20261016-185315-746e15/edit),
+cập nhật recovery **Input lên dataset version 10**, giữ Input epoch gốc và Secret
+`HF_TOKEN` đang bật. Không sửa notebook qua API. Đổi code bootstrap khi Input còn
+version cũ không cập nhật mount của phiên background. Dừng phiên cũ trước khi
+**Save Version → Save & Run All** để chỉ có một writer checkpoint.
+
+Cell đọc đúng Input đã mount, kiểm hash bootstrap của version 10:
+
+```python
+from pathlib import Path
+import hashlib, runpy
+
+bundle = Path('/kaggle/input/datasets/cuonghoangquoc/first-run-memory-recovery-20261017')
+script = bundle / 'resume_first_run.py'
+if hashlib.sha256(script.read_bytes()).hexdigest() != '84dc269946f1b5ba3f0c0d06b22742f7d3e48a524914772483b95d25625a6547':
+    raise RuntimeError('Cập nhật recovery Input lên version 10 trước khi chạy.')
+runpy.run_path(str(script), run_name='__main__')
+```
+
+Bootstrap phải báo `continuation_plan_verified` với `retained_prefix_count=750`,
+`retained_suffix_count=9216`, `skipped_suffix_count=1561`, `total_records=9966`.
+Nếu latest vẫn375, event `resumed` phải là375 và forward đầu376 có hai độ dài
+**14.080/15.786 token**. Chỉ event `step`376 và `checkpoint_saved`380 với
+`published=true` mới xác nhận update/backup mới trên GPU; không suy thành công
+chỉ từ model loaded hoặc forward started. Lượt chuẩn bị/publish code chỉ dùng CPU.

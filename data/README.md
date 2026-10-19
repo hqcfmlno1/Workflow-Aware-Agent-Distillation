@@ -5,6 +5,37 @@ Xem [pipeline và metric phase 1](../docs/action_focused_sft_phase1.md).
 Phase 1 mang tên **Action-focused SFT**; xem [thiết kế loss](../docs/action_focused_sft_loss_design.md)
 và [notebook phân tích trajectories](../notebooks/nvidia_trajectory_action_focused_sft.ipynb).
 
+## Đầu vào cho first run hiện tại
+
+| Thư mục | Vai trò |
+| --- | --- |
+| `processed/first_run_epoch_sft/` | `index.json`, `tokens.bin`, `groups.bin`: nguồn token/group gốc, 11.527 trajectory; giữ nguyên bytes/hash để resume |
+| `processed/first_run_diverse_4000/` | Manifest cohort đến batch 2.000, giữ prefix tại 695; 4.000 trajectory / 3.866 task / 1.501 repo; tham chiếu binary gốc |
+| `processed/nvidia_mini_swe_agent_v1_2_success_qwen35_4b/` | Corpus rendered nguồn để tái tạo token dataset |
+| `interim/nvidia_mini_swe_agent_v1_2_success/` | Successful exports trước normalization |
+| `raw/qwen35_4b_tokenizer/` | Tokenizer/template pin theo model revision |
+| `raw/omnicode_keys_source/` | Metadata benchmark để chống trùng; không phải trajectory OpenAI |
+
+`first_run_diverse_4000/` gồm `diversity-plan.json`, `trajectories.jsonl`,
+`summary.json` và `receipt.json`. Manifest đã xác minh binary nhưng chưa bind
+checkpoint thật hoặc được tích hợp vào launcher Vast. Xem
+[cách tạo và điều kiện resume](../docs/vast_diversity_continuation.md).
+
+Luồng hiện tại:
+`NVIDIA raw → successful export → Qwen render → token/group binary → cohort manifest`.
+Lịch continuation Kaggle gốc ở `cloud/kaggle/recovery/continuation-plan.json`
+được giữ nguyên để đối chiếu prefix và checkpoint identity.
+
+Log, metrics và checkpoint nằm trong `outputs/training/first run/`.
+Không lưu đầu vào train đã chốt trong `outputs/`; không sao chép binary vào
+manifest cohort. Collector OmniCode/OpenAI cũ đã được gỡ; thư mục
+`teacher_dataset/` không còn tồn tại trong workspace khi dọn ngày 2026-10-19.
+
+## Các bộ dữ liệu và bước chuẩn bị trước đây
+
+Các phần dưới mô tả pipeline nguồn và các tập pilot/selection trước đây;
+chúng không thay thế cohort tiếp tục hiện tại.
+
 | Thư mục | Nội dung |
 | --- | --- |
 | `raw/nvidia_open_swe_traces/` | Cache cột nguồn NVIDIA theo revision; không đọc reference patch |
@@ -12,6 +43,8 @@ và [notebook phân tích trajectories](../notebooks/nvidia_trajectory_action_fo
 | `interim/nvidia_mini_swe_agent_v1_2_success/` | Toàn bộ success trajectory của Qwen3.8-27B Thinking, raw Parquet + provenance/partition |
 | `interim/` | Kết quả lọc và chuẩn hóa trung gian |
 | `processed/mini_swe_agent_v1_2_phase1/` | 1.000 train + 50 validation; test ngoài là 500 task SWE-bench Verified, text, pool, checks và manifest |
+| `processed/mini_swe_agent_rule_baseline_4000/` | Selection theo rule trước đây, khác cohort diversity tiếp tục hiện tại |
+| `processed/weighted_sft_tokens_4000/` | Token/group cho selection theo rule trước đây, phục vụ pilot |
 | `splits/` | Dành cho các split khác sau này; phase 1 lưu split cùng processed artifacts |
 | `manifests/` | Dành cho các lần chuẩn bị khác; manifest phase 1 nằm cùng processed artifacts |
 

@@ -34,7 +34,8 @@ def cgroup_memory(root=Path('/sys/fs/cgroup')):
         result['stat'] = {line.split()[0]: int(line.split()[1])
                           for line in (root / 'memory.stat').read_text().splitlines()
                           if line.split()[0] in {'anon', 'file', 'shmem', 'kernel',
-                                                'unevictable', 'slab', 'pagetables'}}
+                                                'unevictable', 'slab', 'pagetables',
+                                                'file_dirty', 'file_writeback'}}
     with suppress(OSError, ValueError, IndexError):
         result['pids_events'] = {line.split()[0]: int(line.split()[1])
                                 for line in (root / 'pids.events').read_text().splitlines()}
@@ -271,6 +272,15 @@ def start_monitor(torch=None, interval=10, *, cgroup_root=Path('/sys/fs/cgroup')
                        for key in ('oom_kill', 'oom_group_kill')):
                     abort_training({'event': 'host_oom_detected', 'cgroup': memory,
                                     'baseline_events': baseline, 'exit_code': 86})
+                if owner:
+                    for rank in (0, 1):
+                        rank_events = _tail_events(Path(progress_dir) / f'rank{rank}.jsonl')
+                        failed = next((e for e in reversed(rank_events)
+                                       if e.get('event') == 'failed'), None)
+                        if failed is not None:
+                            abort_training({'event': 'rank_failure_detected', 'rank': rank,
+                                            'error_type': failed.get('error_type'),
+                                            'exit_code': 86})
                 if owner and time.monotonic() - last_status >= status_interval:
                     emit({'event': 'progress_summary', **progress_summary(progress_dir),
                           'cgroup': memory})

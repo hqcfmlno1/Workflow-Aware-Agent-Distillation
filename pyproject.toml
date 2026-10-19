@@ -13,7 +13,6 @@ dependencies = [
     "httpx>=0.28",
     "jsonlines>=4.0",
     "numpy>=1.26",
-    "openai>=1.75",
     "orjson>=3.10",
     "pandas>=2.2",
     "pyarrow>=19.0",
