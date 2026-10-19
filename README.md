@@ -1,64 +1,83 @@
 # Workflow-Aware-Agent-Distillation
 
-Distill student **Qwen3.5-4B** từ teacher **Qwen3.8-27B Thinking** trên **NVIDIA Open-SWE-Traces v1.2**, sử dụng **mini-SWE-agent** harness. Phase 1 mang tên **Action-focused SFT**, ưu tiên tool calls, Bash commands và submit trên một student đã có năng lực agent. Training dự kiến chạy trên GPU Kaggle qua KRun; lựa chọn LoRA/QLoRA cần được kiểm chứng bằng pilot. Test cuối dùng SWE-bench Verified.
+Baseline **Action-focused SFT** cho student **Qwen3.5-4B**, dùng successful
+trajectories của teacher **Qwen3.8-27B Thinking** từ **NVIDIA Open-SWE-Traces
+v1.2 / mini-SWE-agent**. Loss lấy ý tưởng từ SmartAD: weighted-token CE cho
+reasoning/content/action/submit với trọng số **1 / 0.75 / 1.5 / 2**, rồi trung
+bình đều theo trajectory. Mục tiêu evaluation là **SWE-bench Verified**.
+
+## Trạng thái hiện tại
+
+- QLoRA đã train trên Kaggle; mốc người dùng xác nhận gần nhất là checkpoint
+  **695**, tương ứng **1.390 trajectory**. Xem [cấu hình hiện tại](docs/qlora_current_config.md)
+  và [training/checkpoint trên Kaggle](docs/first_run_epoch.md).
+- Đã chuẩn bị cohort ưu tiên đa dạng đến batch **2.000 / 4.000 trajectory**:
+  **3.866 task**, **1.501 repo**. Giữ nguyên prefix đã học; thêm 2.610 trajectory
+  từ các task mới, mỗi trajectory bổ sung dưới 28.000 token.
+- Chuyển sang Vast đang trong bước chuẩn bị. Cohort mới **chưa được tích hợp
+  để resume/train trên Vast**; cần xác minh checkpoint HF thực tế, chuyển đổi
+  identity có kiểm soát và pilot 3090. Xem [hướng dẫn Vast](docs/vast_diversity_continuation.md).
+- Chưa hoàn tất epoch hoặc có kết quả evaluation student.
 
 ## Cấu trúc
 
 ```text
-configs/
-  datasets/       # Nguồn, revision, bộ lọc và chống trùng benchmark
-  training/       # Cấu hình student và QLoRA
-  harness/        # mini-SWE-agent prompt, actions và model connection
-  evaluation/     # Task selection, budget và verifier
+configs/                    # Manifest nguồn, bộ lọc, cấu hình thí nghiệm
 scripts/
-  data/           # Chuẩn bị và chia NVIDIA trajectories
-  training/       # Pilot, training và resume
-  evaluation/     # Validation và evaluation agent
-  cloud/          # Launcher KRun
-  ...             # Collector và utility hiện có
-src/workflow_distillation/   # Logic Python tái sử dụng
-cloud/kaggle/                # Hướng dẫn workload Kaggle/KRun
+  data/                     # Chuẩn bị dữ liệu và lịch chọn trajectory trên CPU
+  training/                 # Pilot, training, tải checkpoint
+  cloud/                    # Launcher và phục hồi Kaggle
+  evaluation/               # Dành cho entrypoint evaluation
+src/workflow_distillation/  # Dataset, loss, QLoRA runtime, checkpoint, selection
+cloud/kaggle/               # Bootstrap/recovery và lịch continuation hiện có
 data/
-  raw/nvidia_open_swe_traces/
-  interim/
-  processed/mini_swe_agent_v1_2_phase1/
-  splits/
-  manifests/
+  raw/                      # Cache nguồn và tokenizer
+  interim/                  # Export và dữ liệu trung gian
+  processed/
+    first_run_epoch_sft/    # index.json + tokens.bin + groups.bin gốc
+    first_run_diverse_4000/ # Manifest cohort đến batch 2.000; tham chiếu binary gốc
 outputs/
-  training/<run_id>/
-  evaluation/<run_id>/
-  analysis/<run_id>/
-reports/                    # Báo cáo và bằng chứng nghiên cứu được lưu
-notebooks/                  # Phân tích khám phá
-external/                   # Checkout OmniCode/mini-SWE-agent cục bộ, khi cần
+  training/first run/       # Log, metrics, checkpoint và payload triển khai phát sinh
+  evaluation/               # Kết quả benchmark
+  analysis/                 # Phân tích phát sinh
+reports/                    # Bằng chứng nghiên cứu/overlap được lưu trong Git
+notebooks/                  # Phân tích NVIDIA trajectories
 ```
 
-`data/`, `outputs/` và `external/` chứa artifact cục bộ, được bỏ qua bởi Git trừ README hướng dẫn. Các thư mục rỗng cho dữ liệu/output có thể không tồn tại sau clone. Collector hiện có dùng SWE-agent được giữ nguyên để tham khảo; chưa chuyển sang mini-SWE-agent.
+**Đầu vào train nằm trong `data/`; kết quả chạy nằm trong `outputs/`.** Manifest
+cohort chỉ chọn thứ tự record từ binary gốc, không nhân bản dữ liệu. Những bộ
+processed cũ được giữ làm nguồn tái lập; xem [danh mục dữ liệu](data/README.md).
+Artifact lớn trong `data/` và `outputs/` được Git bỏ qua, trừ README.
 
-## Nguồn và chống trùng evaluation
+## Chuẩn bị cohort hiện tại
 
-Manifest: [configs/datasets/nvidia_mini_swe_agent_v1_2_action_focused_sft.json](configs/datasets/nvidia_mini_swe_agent_v1_2_action_focused_sft.json).
+```bash
+uv sync --extra data
+uv run python -m scripts.data.prepare_diverse_continuation \
+  --index data/processed/first_run_epoch_sft/index.json \
+  --source-plan cloud/kaggle/recovery/continuation-plan.json \
+  --resume-step 695 --target-step 2000 --verify-binaries \
+  --output data/processed/first_run_diverse_4000
+```
 
-Chọn `nvidia/Open-SWE-Traces`, config `v1.2`, split `minisweagent`, teacher Qwen3.8-27B Thinking và `resolved == 1`. Phase 1 lấy 250 train + 25 validation cho mỗi category `bug-fix`, `feature-request`, `enhancement`, `other`, từ cả Scale-SWE và SWE-rebench-v2. Giữ reasoning/action/observation và serialize bằng template student chính thức. Chưa cắt context, packing hay tạo training labels.
+Lệnh chỉ chuẩn bị/kiểm tra manifest trên CPU. Mốc resume phải được đối chiếu
+với checkpoint thật trước khi train; nếu checkpoint mới hơn, tạo cohort mới
+giữ toàn bộ prefix đã học. Không sửa index, binary hay lịch continuation gốc.
 
-Loại task trùng OmniCode trước khi chia train/validation. Gom theo repository + số PR đã chuẩn hóa để các ID khác nhau của cùng task giữa hai nguồn không bị chia sang hai tập. Xem [overlap v1.2](docs/data_overlap_v1_2_2026-10-11.md) và [exclusion manifest v1.2](reports/data_overlap_2026-10-11_v1_2/training_exclusions.json). Báo cáo ngày 2026-10-10 được giữ làm bằng chứng lịch sử của snapshot dataset.
+## Nguồn và chống trùng benchmark
 
-## Trạng thái và thứ tự triển khai
+[Manifest nguồn](configs/datasets/nvidia_mini_swe_agent_v1_2_action_focused_sft.json)
+pin dataset/revision, teacher/harness và quy tắc partition. Loại task trùng
+benchmark theo repository + PR chuẩn hóa trước khi chuẩn bị train; không đưa
+reference patch vào đầu vào student. Giữ các
+[báo cáo OmniCode](docs/data_overlap_v1_2_2026-10-11.md) và
+[audit SWE-bench Verified](reports/swebench_verified_overlap_2026-10-12/)
+để tái lập bộ lọc.
 
-Repo có pipeline chuẩn bị NVIDIA phase 1, collector OmniCode và báo cáo overlap.
-Máy local chỉ chuẩn bị dữ liệu và lưu tokenizer; fine-tune chạy trên môi trường khác.
-Trainer QLoRA, launcher KRun và evaluation student chưa được triển khai.
-Xem [cách chạy và định nghĩa metric](docs/action_focused_sft_phase1.md).
-The [Action-focused SFT loss design](docs/action_focused_sft_loss_design.md) uses
-SmartAD-style weighted-token CE with reasoning/content/action/submit weights
-**1 / 0.75 / 1.5 / 2**. The first run evaluates the final one-epoch checkpoint on
-SWE-bench Verified; teacher validation loss is diagnostic. Trainer and token loss
-masks are not implemented yet.
-Notebook phân tích: [NVIDIA trajectories cho Action-focused SFT](notebooks/nvidia_trajectory_action_focused_sft.ipynb).
+Collector OmniCode/OpenAI, script phụ trợ, Dockerfile và hai notebook phân tích
+collector đã được gỡ vì không còn dùng. Các phiên bản cũ vẫn có trong lịch sử Git.
+OmniCode task keys phục vụ chống trùng vẫn được giữ.
 
-1. Chuẩn bị một tập NVIDIA nhỏ, loại overlap và chia train/validation.
-2. Pilot Qwen3.5-4B QLoRA trên GPU Kaggle thực cấp; kiểm tra memory, tốc độ, reasoning serialization và resume.
-3. Kiểm tra student qua mini-SWE-agent trên 5–10 task OmniCode với verifier. Adapter OmniCode cho harness mới cần được triển khai/kiểm chứng riêng.
-4. Mở rộng training và evaluation sau khi hai bước trên chạy ổn.
-
-Xem [cấu hình](configs/README.md), [scripts](scripts/README.md), [dữ liệu](data/README.md), [output](outputs/README.md) và [KRun/Kaggle](cloud/kaggle/README.md).
+Xem thêm [scripts](scripts/README.md), [output](outputs/README.md),
+[thiết kế loss](docs/action_focused_sft_loss_design.md) và
+[pipeline chuẩn bị ban đầu](docs/action_focused_sft_phase1.md).

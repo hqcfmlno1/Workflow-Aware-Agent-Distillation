@@ -9,7 +9,8 @@ weighted-token CE with reasoning/content/action/submit weights **1 / 0.75 / 1.5 
 The local machine prepares data on CPU and stores the tokenizer/chat template;
 fine-tuning runs remotely, provisionally on Kaggle. The preparation pipeline does
 not load model weights, initialize a model, use GPUs, train/evaluate the student,
-or execute teacher commands. The older SWE-agent collector remains unchanged.
+or execute teacher commands. The retired OmniCode/OpenAI SWE-agent collector
+was removed; OmniCode task keys remain inputs to the overlap audit.
 
 ## Run the pilot pipeline
 

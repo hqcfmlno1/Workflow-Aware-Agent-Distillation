@@ -1,23 +1,40 @@
 # Entrypoint
 
-Các script collector SWE-agent hiện có ở thư mục này được giữ nguyên. Pipeline mới dùng mini-SWE-agent; adapter evaluation mới chưa được triển khai.
+Chạy từ thư mục gốc repo, ưu tiên `python -m scripts.<nhóm>.<tên_script>`.
+Máy local chuẩn bị dữ liệu trên CPU; fine-tune chạy remote.
 
-Các thư mục dành cho pipeline mới:
+| Thư mục | Trách nhiệm |
+| --- | --- |
+| `data/` | Tải/export NVIDIA, normalize, tokenize, lọc và chọn thứ tự trajectory |
+| `training/` | Pilot QLoRA, epoch training, tải checkpoint HF |
+| `cloud/` | Preflight và bootstrap/resume Kaggle |
+| `evaluation/` | Dành cho evaluation student qua mini-SWE-agent |
 
-- `data/`: tải dữ liệu, lọc teacher/harness/category, loại task trùng và chia dataset.
-- `training/`: pilot QLoRA, training và resume checkpoint.
-- `evaluation/`: validation loss và chạy evaluation mini-SWE-agent/OmniCode.
-- `cloud/`: chuẩn bị payload và khởi chạy batch job qua KRun.
+## Luồng dữ liệu
 
-Entrypoint dữ liệu: `python scripts/data/prepare_action_focused_sft.py` (CPU, tokenizer only).
-Xem [pipeline phase 1 và metric](../docs/action_focused_sft_phase1.md).
-`python -m scripts.data.prepare_epoch_sft` chuẩn bị toàn bộ successful train-pool
-trajectory dưới 30k token. `training/train_qlora_epoch.py` chạy một epoch DDP
-remote trên hai T4; [hướng dẫn first run](../docs/first_run_epoch.md) mô tả log,
-checkpoint giới hạn dung lượng và backup HF. Đã xác nhận resume và publish
-checkpoint 200 trên hai T4; chưa hoàn tất epoch hoặc đánh giá chất lượng.
-Máy local không chịu trách nhiệm fine-tune.
-Các pilot QLoRA chạy remote qua KRun đã có checkpoint định kỳ và resume; xem
-[hướng dẫn checkpoint](../docs/training_checkpoint_resume.md). Công cụ CPU
-`training/fetch_training_checkpoint.py` tải bản mới nhất từ repo HF private để
-gắn vào phiên Kaggle tiếp theo.
+1. `data/prepare_action_focused_sft.py`: cache nguồn, loại overlap và chuẩn bị pilot.
+2. `data/export_success_trajectories.py`: export successful train/validation/excluded records.
+3. `data/convert_success_trajectories.py`: normalize/render theo tokenizer Qwen.
+4. `data/prepare_epoch_sft.py`: tạo `data/processed/first_run_epoch_sft/`
+   với index và binary cho successful train-pool trajectories dưới 30.000 token.
+5. `data/prepare_diverse_continuation.py`: tạo manifest cohort trong
+   `data/processed/first_run_diverse_4000/`, giữ prefix đã học và chọn task/repo
+   đa dạng từ suffix của lịch continuation `<28.000 token`.
+
+`select_rule_trajectories.py`, `prepare_weighted_sft.py` và
+`select_weighted_sft_context.py` phục vụ selection/pilot trước đây; chúng không
+chọn cohort tiếp tục trên Vast. Xem [dữ liệu](../data/README.md) để phân biệt input.
+
+## Training và checkpoint
+
+`training/train_qlora_epoch.py` là trainer epoch gốc. Bootstrap
+`cloud/resume_first_run.py` và `training/train_qlora_filtered.py` phục vụ
+continuation Kaggle hiện có; giữ nguyên identity/lịch đã dùng để train.
+Xem [first run](../docs/first_run_epoch.md) và
+[checkpoint/resume](../docs/training_checkpoint_resume.md).
+
+`training/fetch_training_checkpoint.py` tải checkpoint mới nhất từ HF.
+Cohort đa dạng mới là artifact dữ liệu; **chưa có launcher Vast tích hợp cohort**.
+Xem [điều kiện trước khi chạy Vast](../docs/vast_diversity_continuation.md).
+
+Collector OmniCode/OpenAI và các utility riêng của collector đã được gỡ.

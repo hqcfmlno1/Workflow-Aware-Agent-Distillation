@@ -48,4 +48,4 @@ Loại trùng trước khi chia dataset. Gom trajectory theo khóa repository + 
 
 Phạm vi exact repository/PR không phát hiện đầy đủ hai PR khác nhau giải cùng issue, fork hay repository đổi tên. Audit patch ngày 2026-10-10 kiểm tra mẫu của từng PR; cập nhật này không tuyên bố kiểm chứng patch của mọi trajectory v1.2. Không suy luận về contamination trong pretraining của student.
 
-Collector cũ trong `src/workflow_distillation/omnicode_collector.py` vẫn dùng SWE-agent. Thay đổi manifest không tự đổi runner hoặc prompt/tool protocol của collector đó. Cần triển khai đường chạy mini-SWE-agent và giữ cùng harness khi so sánh student gốc với student sau distillation.
+Collector OmniCode/OpenAI dùng SWE-agent đã được gỡ ngày 2026-10-19 vì không còn dùng. Các task keys, checksum và báo cáo overlap vẫn được giữ để tái lập bộ lọc NVIDIA. Evaluation student cần đường chạy mini-SWE-agent và cùng harness cho student gốc lẫn student sau distillation.
