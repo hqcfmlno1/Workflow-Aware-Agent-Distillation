@@ -25,8 +25,15 @@ if os.environ.get('FIRST_RUN_HOST_CACHE_RECOVERY') == '1':
 
             install_cache_cleanup(torch)
             install_checkpoint_cleanup(torch, CheckpointManager)
+            if os.environ.get('FIRST_RUN_ADAPTIVE_MEMORY') == '1':
+                from adaptive_memory import install_adaptive_execution
+
+                from workflow_distillation import qlora_runtime
+
+                install_adaptive_execution(torch, qlora_runtime, CheckpointManager, emit)
             emit({'event': 'host_cache_recovery_installed', 'rank': os.environ['LOCAL_RANK'],
-                  'torch_version': torch.__version__})
+                  'torch_version': torch.__version__,
+                  'adaptive_memory': os.environ.get('FIRST_RUN_ADAPTIVE_MEMORY') == '1'})
         start_monitor(torch)
     except Exception as exc:
         # Python otherwise swallows sitecustomize errors and starts training unpatched.
