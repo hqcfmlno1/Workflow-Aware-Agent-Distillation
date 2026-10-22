@@ -1,0 +1,5 @@
+{
+  "attention": "flash_repeated_kv",
+  "activation_storage": "hybrid",
+  "gpu_budget_bytes": 2147483648
+}

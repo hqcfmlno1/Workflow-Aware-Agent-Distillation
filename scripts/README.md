@@ -1,12 +1,14 @@
 # Entrypoint
 
-Chạy từ thư mục gốc repo, ưu tiên `python -m scripts.<nhóm>.<tên_script>`.
+Training refactor bắt đầu tại `python scripts/train.py --help`.
+Các script phụ trợ chạy từ gốc repo bằng `python -m scripts.<nhóm>.<tên_script>`.
 Máy local chuẩn bị dữ liệu trên CPU; fine-tune chạy remote.
 
 | Thư mục | Trách nhiệm |
 | --- | --- |
 | `data/` | Tải/export NVIDIA, normalize, tokenize, lọc và chọn thứ tự trajectory |
-| `training/` | Pilot QLoRA, epoch training, tải checkpoint HF |
+| `train.py` | Entrypoint refactor: validate/preflight/launch/worker |
+| `training/` | Pilot QLoRA, tải checkpoint HF và launcher lịch sử |
 | `cloud/` | Preflight và bootstrap/resume Kaggle |
 | `evaluation/` | Dành cho evaluation student qua mini-SWE-agent |
 
@@ -27,6 +29,11 @@ chọn cohort tiếp tục trên Vast. Xem [dữ liệu](../data/README.md) đ�
 
 ## Training và checkpoint
 
+Luồng local mới: `train.py` → `src/workflow_distillation/training/cli.py` →
+`engine.py`, chọn GPU bằng `configs/training/gpus/<GPU>/profile.json`.
+Xem [bản đồ review và migration](../docs/training.md). Bản refactor chưa deploy
+lên server hoặc pilot trên CUDA; nó không tự thay launcher của run remote.
+
 `training/train_qlora_epoch.py` là trainer epoch gốc. Bootstrap
 `cloud/resume_first_run.py` và `training/train_qlora_filtered.py` phục vụ
 continuation Kaggle hiện có; giữ nguyên identity/lịch đã dùng để train.
@@ -34,7 +41,9 @@ Xem [first run](../docs/first_run_epoch.md) và
 [checkpoint/resume](../docs/training_checkpoint_resume.md).
 
 `training/fetch_training_checkpoint.py` tải checkpoint mới nhất từ HF.
-Cohort đa dạng mới là artifact dữ liệu; **chưa có launcher Vast tích hợp cohort**.
-Xem [điều kiện trước khi chạy Vast](../docs/vast_diversity_continuation.md).
+`training/train_qlora_vast*.py` và `training/gpus/rtx4080_32gb/train.py` là các
+đường chạy đã dùng cho Vast trước refactor. Giữ nguyên chúng để bảo toàn hash
+và resume; không thêm orchestration mới vào chain launcher này.
+Xem [inventory tương thích](../legacy/README.md).
 
 Collector OmniCode/OpenAI và các utility riêng của collector đã được gỡ.

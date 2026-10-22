@@ -1,0 +1,11 @@
+{
+  "name": "rtx4080_32gb",
+  "device_name": "NVIDIA GeForce RTX 4080",
+  "minimum_vram_bytes": 32212254720,
+  "per_gpu_batch_size": 2,
+  "activation_storage": "hybrid",
+  "gpu_budget_bytes": 4294967296,
+  "attention": "t4_repeated_kv",
+  "world_size": 2,
+  "allow_serial": false
+}

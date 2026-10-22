@@ -1,0 +1,5 @@
+{
+  "attention": "t4_repeated_kv",
+  "activation_storage": "hybrid",
+  "gpu_budget_bytes": 4294967296
+}

@@ -1,0 +1,11 @@
+{
+  "name": "t4_16gb",
+  "device_name": "Tesla T4",
+  "minimum_vram_bytes": 15032385536,
+  "per_gpu_batch_size": 1,
+  "activation_storage": "cpu",
+  "gpu_budget_bytes": 0,
+  "attention": "t4_repeated_kv",
+  "world_size": 2,
+  "allow_serial": true
+}

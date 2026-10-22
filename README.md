@@ -8,15 +8,19 @@ bình đều theo trajectory. Mục tiêu evaluation là **SWE-bench Verified**.
 
 ## Trạng thái hiện tại
 
-- QLoRA đã train trên Kaggle; mốc người dùng xác nhận gần nhất là checkpoint
-  **695**, tương ứng **1.390 trajectory**. Xem [cấu hình hiện tại](docs/qlora_current_config.md)
-  và [training/checkpoint trên Kaggle](docs/first_run_epoch.md).
+- Training đã chạy trên Kaggle và Vast. Bằng chứng pilot/resume 4080 được ghi
+  trong repo ở checkpoint **1028 / 2.692 trajectory**, với Efficient SDPA và
+  hybrid activation storage 4 GiB/GPU. Đây là mốc đã xác minh trong tài liệu,
+  không phải tiến độ realtime; xem [profile 4080](configs/training/gpus/rtx4080_32gb/README.md).
 - Đã chuẩn bị cohort ưu tiên đa dạng đến batch **2.000 / 4.000 trajectory**:
   **3.866 task**, **1.501 repo**. Giữ nguyên prefix đã học; thêm 2.610 trajectory
   từ các task mới, mỗi trajectory bổ sung dưới 28.000 token.
-- Chuyển sang Vast đang trong bước chuẩn bị. Cohort mới **chưa được tích hợp
-  để resume/train trên Vast**; cần xác minh checkpoint HF thực tế, chuyển đổi
-  identity có kiểm soát và pilot 3090. Xem [hướng dẫn Vast](docs/vast_diversity_continuation.md).
+- Cohort đã được tích hợp trên Vast và mở rộng sang pool còn lại, giữ nguyên
+  prefix đã học. Global batch hiện dùng 4 (2 trajectory/GPU).
+- Luồng refactor local có một entrypoint [`scripts/train.py`](scripts/train.py),
+  module [`training/`](src/workflow_distillation/training/) và profile riêng theo GPU.
+  **Chưa triển khai bản refactor lên server; cần CUDA migration pilot trước khi dùng.**
+  Bắt đầu review tại [bản đồ training](docs/training.md).
 - Chưa hoàn tất epoch hoặc có kết quả evaluation student.
 
 ## Cấu trúc
@@ -24,11 +28,16 @@ bình đều theo trajectory. Mục tiêu evaluation là **SWE-bench Verified**.
 ```text
 configs/                    # Manifest nguồn, bộ lọc, cấu hình thí nghiệm
 scripts/
+  train.py                  # Entrypoint refactor: preflight / launch / worker
   data/                     # Chuẩn bị dữ liệu và lịch chọn trajectory trên CPU
-  training/                 # Pilot, training, tải checkpoint
+  training/                 # Pilot, tải checkpoint và launcher tương thích lịch sử
   cloud/                    # Launcher và phục hồi Kaggle
   evaluation/               # Dành cho entrypoint evaluation
-src/workflow_distillation/  # Dataset, loss, QLoRA runtime, checkpoint, selection
+src/workflow_distillation/
+  training/                 # Pipeline refactor: config/data/model/engine/checkpoint
+  *.py                      # Primitive dùng chung và implementation lịch sử đã pin hash
+configs/training/gpus/      # Mỗi GPU một profile.json; xem README từng GPU
+legacy/first_run/           # Inventory hash; source lịch sử giữ ở đường dẫn gốc
 cloud/kaggle/               # Bootstrap/recovery và lịch continuation hiện có
 data/
   raw/                      # Cache nguồn và tokenizer
@@ -36,6 +45,7 @@ data/
   processed/
     first_run_epoch_sft/    # index.json + tokens.bin + groups.bin gốc
     first_run_diverse_4000/ # Manifest cohort đến batch 2.000; tham chiếu binary gốc
+    first_run_diverse_remaining/ # Pool mở rộng, bảo toàn cohort/prefix đã học
 outputs/
   training/first run/       # Log, metrics, checkpoint và payload triển khai phát sinh
   evaluation/               # Kết quả benchmark
