@@ -28,5 +28,8 @@ external/
 # Local agent planning artifacts
 docs/superpowers/
 
-# Local KRun job history and downloaded artifacts
+# Historical KRun artifacts; keep local downloads out of Git
 .krun/
+
+# Personal study notes
+/notes/qlora-sft-review.md

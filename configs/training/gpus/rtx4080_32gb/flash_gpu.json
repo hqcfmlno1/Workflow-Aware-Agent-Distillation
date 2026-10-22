@@ -1,0 +1,5 @@
+{
+  "attention": "flash_repeated_kv",
+  "activation_storage": "gpu",
+  "gpu_budget_bytes": 0
+}

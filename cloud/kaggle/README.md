@@ -1,4 +1,10 @@
-# Remote weighted SFT through KRun
+# Historical Kaggle / KRun training notes
+
+This document records earlier Kaggle pilots and launch procedures. The current
+Vast training job uses SSH setup and a Supervisor controller; it does not use
+KRun or `.krunignore`. Commands and status snapshots below describe historical
+runs, not the current launch procedure. Current GPU execution profiles are
+documented in [configs/training/gpus](../../configs/training/gpus/README.md).
 
 Run KRun locally to submit code; model loading, inference, and training run only
 inside Kaggle. Local preparation uses the tokenizer and CPU arrays. The local

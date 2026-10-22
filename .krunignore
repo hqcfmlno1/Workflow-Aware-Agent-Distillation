@@ -1,6 +1,0 @@
-# Keep cloud payload focused on source, configuration and audit inputs.
-notebooks/
-tests/
-.pytest_cache/
-.ruff_cache/
-# reports/ remains included: dataset manifest references overlap audit files.
