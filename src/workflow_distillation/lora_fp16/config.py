@@ -25,6 +25,9 @@ class RunConfig:
     weight_decay: float = 0.01
     max_grad_norm: float = 1.0
     loss_chunk_size: int = 128
+    loss_normalization: str = "token_mean"
+    length_alpha: float = 0.0
+    group_weights: tuple[float, ...] = WEIGHTS
     gdn_backend: str = "fla"
     activation_storage: str = "gpu"
     gpu_budget_bytes: int = 0
@@ -34,6 +37,21 @@ class RunConfig:
     minimum_headroom_bytes: int = 2 * 2**30
 
     def __post_init__(self):
+        object.__setattr__(self, "group_weights", tuple(self.group_weights))
+        if (
+            self.loss_normalization not in ("token_mean", "token_group")
+            or not math.isfinite(self.length_alpha)
+            or not 0 <= self.length_alpha <= 1
+            or len(self.group_weights) != 5
+            or any(not math.isfinite(w) or w < 0 for w in self.group_weights)
+            or self.group_weights[0] != 0
+            or sum(self.group_weights) <= 0
+        ):
+            raise ValueError("Invalid loss normalization, length_alpha or group weights")
+        if self.loss_normalization == "token_mean" and (
+            self.length_alpha != 0 or self.group_weights != WEIGHTS
+        ):
+            raise ValueError("Custom loss settings require token_group normalization")
         if self.model != MODEL or self.revision != REVISION:
             raise ValueError("Use the pinned Qwen3.5-4B base")
         if self.base_dtype != "float16" or self.quantization != "none":
@@ -71,4 +89,4 @@ class RunConfig:
             raise ValueError("Invalid activation storage")
 
     def to_dict(self):
-        return asdict(self)
+        return {**asdict(self), "group_weights": list(self.group_weights)}

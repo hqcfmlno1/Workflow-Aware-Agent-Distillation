@@ -8,8 +8,8 @@ from contextlib import nullcontext
 
 import numpy as np
 
+from workflow_distillation.lora_fp16.loss import chunked_hidden_loss, group_loss_parameters
 from workflow_distillation.training.activation_storage import activation_context
-from workflow_distillation.weighted_sft_loss import chunked_hidden_loss
 
 
 def schedule(count, *, epochs, accumulation, seed):
@@ -36,6 +36,12 @@ def validate_cursor(batches, progress):
 def trajectory_loss(state, record, config, device):
     import torch
 
+    coefficients = None
+    denominator = record["denominator"]
+    if config.loss_normalization == "token_group":
+        coefficients, denominator = group_loss_parameters(
+            record["groups"], config.group_weights, config.length_alpha
+        )
     ids = torch.as_tensor(np.array(record["input_ids"], dtype=np.int64), device=device)[None]
     groups = torch.as_tensor(np.array(record["groups"], dtype=np.int64), device=device)[None]
     labels = ids.masked_fill(groups == 0, -100)
@@ -50,9 +56,10 @@ def trajectory_loss(state, record, config, device):
             state.head,
             labels,
             groups,
-            record["denominator"],
+            denominator,
             1.0,
             chunk_size=config.loss_chunk_size,
+            group_weights=coefficients,
         )
 
 

@@ -25,6 +25,7 @@ from workflow_distillation.lora_fp16.engine import (
     train_update,
     validate_cursor,
 )
+from workflow_distillation.lora_fp16.loss import group_loss_parameters
 from workflow_distillation.training.events import EventLog
 from workflow_distillation.training_checkpoints import (
     StopBudget,
@@ -93,7 +94,7 @@ def prepare(config, index):
         "records_sha256": sha256_file(index),
         "settings": {
             "config": config.to_dict(),
-            "loss_weights": [0, 1, 0.75, 1.5, 2],
+            "loss_weights": list(config.group_weights),
             "packages": {
                 p: package_version(p)
                 for p in (
@@ -254,6 +255,19 @@ def main(argv=None):
         "identity": identity,
         "cuda_pilot_verified": False,
     }
+    if config.loss_normalization == "token_group":
+        shares = []
+        for i in train:
+            groups = dataset.record(i)["groups"]
+            coefficients, denominator = group_loss_parameters(
+                groups, config.group_weights, config.length_alpha
+            )
+            counts = np.bincount(np.asarray(groups[1:], dtype=np.int64), minlength=5)
+            shares.append(np.asarray(coefficients) * counts / denominator)
+        report["mean_loss_coefficient_share"] = dict(
+            zip(("masked", "reasoning", "content", "action", "submit"),
+                np.mean(shares, axis=0).tolist(), strict=True)
+        )
     if args.mode == "preflight":
         (args.output / "preflight.json").write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps({k: v for k, v in report.items() if k != "identity"}, indent=2))

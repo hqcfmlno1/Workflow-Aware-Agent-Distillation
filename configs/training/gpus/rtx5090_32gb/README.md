@@ -34,6 +34,10 @@ payloads. Large files remain under ignored `data/processed/`; credentials remain
 in the server's HF cache, never in Git. Preparation code:
 `scripts/data/prepare_fp16_tqs.py`.
 
+For the new action-prioritized token-group objective and one-command launch,
+see [GROUP_LOSS.md](GROUP_LOSS.md). The profile described below is the original
+token-mean experiment; its settings remain available separately.
+
 ## Model and objective
 
 - Text transformer and tied embedding/head on GPU; frozen vision on CPU.
