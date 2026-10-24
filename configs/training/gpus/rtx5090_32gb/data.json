@@ -1,0 +1,11 @@
+{
+  "repo_id": "hqcfmlno1/qwen35-tqs1140-holdout20-v1",
+  "repo_type": "dataset",
+  "revision": "b251ea147834c3620da8e69cfbd4f31bfea017b4",
+  "path": "tokens",
+  "files": {
+    "index.json": "240f5352d813764d437d5b8a03502b578e3253d2d7bc41e990849fb42f7936ce",
+    "tokens.bin": "aa74821d8216470f6c123354cad851464006c96f84179893e9a138f62f61d5b8",
+    "groups.bin": "6efea9852fe48c5a4b7c0ee57c212af583fc9e24ae2c71d870de3bc027a06569"
+  }
+}
