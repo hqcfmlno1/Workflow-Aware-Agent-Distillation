@@ -178,3 +178,10 @@ atomic HF migration/retention/rollback và watchdog ownership.
 .venv/bin/ruff check src/workflow_distillation/training scripts/train.py tests/test_training_*.py
 git diff --check
 ```
+
+## Fresh FP16 LoRA on one RTX5090
+
+See the [RTX5090 runbook](../configs/training/gpus/rtx5090_32gb/README.md). This
+independent experiment starts a new adapter from the pinned FP16 base, uses the
+TQS-selected corpus with a fixed20task holdout, and retains epoch checkpoints.
+Its CPU preflight and pilot are separate from the two-GPU NF4 migration above.

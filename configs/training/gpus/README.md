@@ -13,3 +13,11 @@ Historical launchers and `src/workflow_distillation/gpu_profiles/` adapters rema
 in place because checkpoint identities pin their paths and SHA256 checksums.
 Other JSON files in the 4080 folder are inputs to those historical experiments;
 they are not interchangeable with the canonical `profile.json` schema.
+
+## RTX5090: fresh FP16 LoRA
+
+[RTX5090 32GB](rtx5090_32gb/README.md) uses a separate fresh-run entrypoint,
+`python -m workflow_distillation.lora_fp16`. It trains an unquantized FP16 base
+with LoRA on the frozen TQS>=0.6 selection and a 20task holdout. Its Vast
+bootstrap, isolated GPU pilot, detached launcher and resume are documented there.
+The legacy two-GPU NF4 continuation entrypoint remains unchanged.
