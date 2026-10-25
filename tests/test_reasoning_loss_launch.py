@@ -38,13 +38,13 @@ def test_reasoning_ablation_uses_one_profile_and_refuses_reused_output(tmp_path)
     assert len(set(paths)) == 1
     old = json.loads(Path("configs/training/gpus/rtx5090_32gb/group_loss.json").read_text())
     new = json.loads(Path(paths[0]).read_text())
-    assert new["group_weights"] == [0, 0.5, 0.05, 1, 0.5]
+    assert new["group_weights"] == [0, 2.0, 0.05, 1, 0.5]
     assert {k: v for k, v in new.items() if k != "group_weights"} == {
         k: v for k, v in old.items() if k != "group_weights"
     }
     final = stages[-1]
-    assert final[final.index("--hub-repo") + 1].endswith("-reasoning050-run1")
-    assert final[final.index("--hub-prefix") + 1] == "fp16-tqs060-reasoning050"
+    assert final[final.index("--hub-repo") + 1].endswith("-reasoning200-run1")
+    assert final[final.index("--hub-prefix") + 1] == "fp16-tqs060-reasoning200"
     assert final[final.index("--max-seconds") + 1] == "3600"
     assert "--resume" not in final
     calls.unlink()

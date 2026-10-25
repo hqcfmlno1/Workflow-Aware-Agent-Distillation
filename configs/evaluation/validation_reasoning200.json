@@ -17,11 +17,11 @@
       "known_last_step": 170
     },
     {
-      "name": "fp16-reasoning050",
-      "config": "configs/training/gpus/rtx5090_32gb/reasoning_050.json",
-      "local": "outputs/training/rtx5090_32gb/tqs060-fp16-reasoning050/checkpoints",
-      "repo": "hqcfmlno1/QwenStacy-4b-fp16-tqs060-reasoning050-run1",
-      "prefix": "fp16-tqs060-reasoning050",
+      "name": "fp16-reasoning200",
+      "config": "configs/training/gpus/rtx5090_32gb/reasoning_200.json",
+      "local": "outputs/training/rtx5090_32gb/tqs060-fp16-reasoning200/checkpoints",
+      "repo": "hqcfmlno1/QwenStacy-4b-fp16-tqs060-reasoning200-run1",
+      "prefix": "fp16-tqs060-reasoning200",
       "known_last_step": 0
     }
   ]
