@@ -16,6 +16,9 @@ event. The frozen trainer/config retain their original hashes and historical
 save_every20 so strict checkpoint identity, optimizer/scheduler/RNG restoration
 and the passing CUDA pilot stay valid. Training math is unchanged.
 
+Startup performs no Hub API check. Network validation is deferred until the
+actual epoch upload, so a temporary HF outage cannot block loading local state.
+
 Epoch publication preserves Python/NumPy/Torch CPU/CUDA RNG. If an epoch upload
 fails after its local commit, resuming at that boundary retries the upload before
 the next batch. Hub retention pins both epoch ends. No background publisher or

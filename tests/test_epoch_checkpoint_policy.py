@@ -101,3 +101,51 @@ def test_resume_epoch_boundary_retries_publication_before_another_update(tmp_pat
         update=update, evaluate=lambda epoch: None, save=save, emit=lambda e: None,
         save_every=20, should_stop=lambda: False,
     )
+
+
+def test_startup_needs_no_hub_connection_before_epoch_upload(tmp_path, monkeypatch):
+    import json
+    import sys
+
+    from huggingface_hub import HfApi
+
+    from scripts.training import train_epoch_checkpoints as entry
+    from workflow_distillation.epoch_data import sha256_file
+    from workflow_distillation.lora_fp16.metacurate import write_corpus
+
+    corpus = tmp_path / "corpus"
+    write_corpus([
+        dict(trajectory_id=t, task_key=t, resolved=True, full_token_count=2,
+             input_ids=[1, 2], groups=[0, 1]) for t in ("one", "two")
+    ], corpus, {})
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps(entry.RunConfig(
+        loss_normalization="vanilla", group_weights=(0, 1, 1, 1, 1),
+    ).to_dict()))
+    selection = tmp_path / "selection.json"
+    selection.write_text(json.dumps(dict(
+        index_sha256=sha256_file(corpus / "index.json"), selected_ids=["one", "two"],
+    )))
+    output = tmp_path / "out"
+
+    def offline(*args, **kwargs):
+        raise ConnectionError("HF is unavailable")
+
+    def accept_local_training(args):
+        (output / "delegated.json").write_text(json.dumps(args))
+
+    monkeypatch.setattr(HfApi, "repo_info", offline)
+    monkeypatch.setattr(entry.cli, "main", accept_local_training)
+    monkeypatch.setattr(sys, "argv", [
+        "train_epoch_checkpoints", "--config", str(config), "--index", str(corpus / "index.json"),
+        "--selection", str(selection), "--output", str(output),
+        "--hub-repo", "owner/epochs", "--hub-prefix", "run",
+    ])
+    original_loop = entry.cli.run_loop
+    try:
+        entry.main()
+    finally:
+        entry.cli.run_loop = original_loop
+    policy = json.loads((output / "runtime-checkpoint-policy.json").read_text())
+    assert policy["epoch_checkpoint_steps"] == [1, 2]
+    assert "--hub-repo" not in json.loads((output / "delegated.json").read_text())

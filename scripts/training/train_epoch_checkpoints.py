@@ -85,7 +85,8 @@ def main():
         args.hub_repo, prefix=args.hub_prefix, pinned_steps=pins,
         keep_last=config.keep_recovery if args.prune_hub_history else None,
     )
-    publisher.validate()
+    # Hub connectivity is needed only at an epoch upload. The base and resume
+    # state are local: do not make an idle paid GPU wait for a startup API call.
     policy = {"save_every": interval, "epoch_checkpoint_steps": pins,
               "upload": "epoch_end_only", "graceful_stop_checkpoint": "local_only",
               "original_identity_preserved": True}
