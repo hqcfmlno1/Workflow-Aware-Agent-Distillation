@@ -1,0 +1,28 @@
+{
+  "runs": [
+    {
+      "name": "fp16-token-loss",
+      "config": "configs/training/gpus/rtx5090_32gb/run.json",
+      "local": "outputs/training/rtx5090_32gb/tqs060-fp16/checkpoints",
+      "repo": "hqcfmlno1/QwenStacy-4b-fp16-tqs060-run1",
+      "prefix": "fp16-tqs060",
+      "known_last_step": 304
+    },
+    {
+      "name": "fp16-group-loss",
+      "config": "configs/training/gpus/rtx5090_32gb/group_loss.json",
+      "local": "outputs/training/rtx5090_32gb/tqs060-fp16-group-loss/checkpoints",
+      "repo": "hqcfmlno1/QwenStacy-4b-fp16-tqs060-group-loss-run1",
+      "prefix": "fp16-tqs060-group-loss",
+      "known_last_step": 170
+    },
+    {
+      "name": "fp16-reasoning050",
+      "config": "configs/training/gpus/rtx5090_32gb/reasoning_050.json",
+      "local": "outputs/training/rtx5090_32gb/tqs060-fp16-reasoning050/checkpoints",
+      "repo": "hqcfmlno1/QwenStacy-4b-fp16-tqs060-reasoning050-run1",
+      "prefix": "fp16-tqs060-reasoning050",
+      "known_last_step": 0
+    }
+  ]
+}
