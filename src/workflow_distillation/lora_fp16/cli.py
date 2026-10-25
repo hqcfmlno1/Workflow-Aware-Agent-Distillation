@@ -1,4 +1,4 @@
-"""Preflight, isolated CUDA pilot, and fresh multi-epoch FP16 LoRA on one 5090."""
+"""Preflight, isolated CUDA pilot, and fresh multi-epoch 16-bit LoRA on one 5090."""
 
 from __future__ import annotations
 
@@ -65,13 +65,20 @@ def package_version(name):
         return None
 
 
-def prepare(config, index):
-    selection = json.loads((PROFILE / "selection.json").read_text())
+def prepare(config, index, selection_path=None):
+    selection = json.loads((selection_path or PROFILE / "selection.json").read_text())
     if sha256_file(index) != selection["index_sha256"]:
-        raise ValueError("Dataset is not the frozen TQS1140/20-task experiment")
-    dataset, split = load_bundle(index)
-    if split != selection["split"]:
-        raise ValueError("Holdout selection differs")
+        raise ValueError("Dataset differs from the frozen experiment selection")
+    if selection_path is not None:
+        from workflow_distillation.lora_fp16.metacurate import load_corpus
+
+        if config.loss_normalization != "vanilla":
+            raise ValueError("The complete MetaCurate profile requires vanilla SFT")
+        dataset, split = load_corpus(index, selection)
+    else:
+        dataset, split = load_bundle(index)
+        if split != selection["split"]:
+            raise ValueError("Holdout selection differs")
     by_id = {r["trajectory_id"]: i for i, r in enumerate(dataset.records)}
     train = [by_id[t] for t in split["train_ids"]]
     validation = [by_id[t] for t in split["validation_ids"]]
@@ -133,7 +140,9 @@ def gpu_audit(config):
     )
     # Fail before loading 8GB of weights if this torch build cannot execute on
     # Blackwell. Architecture strings alone need not cover PTX-compatible builds.
-    probe = torch.ones((32, 32), device="cuda", dtype=torch.float16)
+    if config.base_dtype == "bfloat16" and not torch.cuda.is_bf16_supported():
+        raise ValueError("This GPU/runtime does not support BF16")
+    probe = torch.ones((32, 32), device="cuda", dtype=getattr(torch, config.base_dtype))
     torch.testing.assert_close(probe @ probe, torch.full_like(probe, 32))
     torch.cuda.synchronize()
     return {
@@ -159,6 +168,9 @@ def pilot(state, dataset, train, config, device, identity, hardware, emit, desti
     rng = np.random.default_rng(config.seed)
     typical = rng.choice(by_length, size=min(16, len(train)), replace=False).tolist()
     trials = [("longest", longest[: config.accumulation])]
+    if config.loss_normalization == "vanilla":
+        # Repeat with initialized Adam state and reversed long-sequence order.
+        trials += [("longest_repeat", list(reversed(longest[: config.accumulation])))]
     trials += [
         ("representative", typical[i : i + config.accumulation])
         for i in range(0, len(typical), config.accumulation)
@@ -215,6 +227,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("preflight", "pilot", "train"), default="preflight")
     parser.add_argument("--config", type=Path, default=PROFILE / "run.json")
+    parser.add_argument("--selection", type=Path, help="Pinned complete MetaCurate corpus receipt")
     parser.add_argument(
         "--index", type=Path, default=ROOT / "data/processed/tqs1140_holdout20_fp16/index.json"
     )
@@ -230,7 +243,7 @@ def main(argv=None):
     parser.add_argument(
         "--prune-hub-history",
         action="store_true",
-        help="Explicitly squash dedicated repo history; keep epoch boundaries + last3",
+        help="Squash dedicated repo history; keep epochs + configured recovery count",
     )
     args = parser.parse_args(argv)
     if args.max_seconds < 1 or (args.prune_hub_history and not args.hub_repo):
@@ -238,7 +251,7 @@ def main(argv=None):
     config = RunConfig(**json.loads(args.config.read_text()))
     if args.epochs is not None:
         config = replace(config, epochs=args.epochs)
-    dataset, train, validation, batches, identity = prepare(config, args.index)
+    dataset, train, validation, batches, identity = prepare(config, args.index, args.selection)
     steps_per_epoch = math.ceil(len(train) / config.accumulation)
     pinned = list(range(steps_per_epoch, len(batches) + 1, steps_per_epoch))
     args.output.mkdir(parents=True, exist_ok=True)
@@ -281,7 +294,7 @@ def main(argv=None):
             execute(args, config, dataset, train, validation, batches, identity, pinned, report)
         except Exception as exc:
             failure = {"event": "failed", "error_type": type(exc).__name__, "error": str(exc)}
-            EventLog(args.output / "failures.jsonl", "5090-fp16-tqs060")(failure)
+            EventLog(args.output / "failures.jsonl", args.output.name)(failure)
             raise
 
 
@@ -292,7 +305,7 @@ def execute(args, config, dataset, train, validation, batches, identity, pinned,
 
     emit = EventLog(
         args.output / ("pilot.jsonl" if args.mode == "pilot" else "events.jsonl"),
-        "5090-fp16-tqs060",
+        args.output.name,
     )
     pilot_path = args.pilot_report or args.output / "pilot.json"
     if args.mode == "pilot":
@@ -325,7 +338,7 @@ def execute(args, config, dataset, train, validation, batches, identity, pinned,
             publisher = HuggingFacePublisher(
                 args.hub_repo,
                 prefix=args.hub_prefix,
-                keep_last=max(2, config.keep_recovery) if args.prune_hub_history else None,
+                keep_last=config.keep_recovery if args.prune_hub_history else None,
                 pinned_steps=pinned,
             )
             info = publisher.validate()
@@ -339,7 +352,7 @@ def execute(args, config, dataset, train, validation, batches, identity, pinned,
             {
                 "event": "model_loaded",
                 "trainable_parameters": sum(p.numel() for p in state.parameters),
-                "base_dtype": "float16",
+                "base_dtype": config.base_dtype,
                 "quantization": "none",
                 "load_seconds": time.monotonic() - started,
             }
@@ -393,6 +406,15 @@ def execute(args, config, dataset, train, validation, batches, identity, pinned,
             return {**metrics, "learning_rate": used_lr}
 
         def validate(epoch):
+            if not validation:
+                emit({"event": "epoch_boundary", "epoch": epoch,
+                      "validation": "disabled; all selected trajectories used for training"})
+                # Atomic checkpoints already contain adapter and optimizer state.
+                # Also provide standard PEFT exports ready for inference.
+                if epoch > 0:
+                    export = args.output / "adapters" / f"epoch-{epoch:03d}"
+                    state.model.save_pretrained(export, safe_serialization=True)
+                return
             emit({"event": "validation_started", "epoch": epoch})
             metrics = evaluate(state, (dataset.record(i) for i in validation), config, device, emit)
             emit({"event": "validation_complete", "epoch": epoch, **metrics})
