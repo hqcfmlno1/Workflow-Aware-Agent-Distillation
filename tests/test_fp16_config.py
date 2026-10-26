@@ -15,7 +15,7 @@ def test_fp16_model_arguments_are_unquantized_and_vision_is_cpu():
     assert kwargs["device_map"]["model.language_model.layers.31"] == 0
     assert kwargs["attn_implementation"] == "sdpa"
     for values in [
-        dict(base_dtype="bfloat16"),
+        dict(base_dtype="float32"),
         dict(quantization="nf4"),
         dict(epochs=0),
         dict(accumulation=0),

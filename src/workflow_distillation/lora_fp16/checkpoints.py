@@ -63,9 +63,13 @@ class CheckpointManager(AtomicManager):
 
 
 class HuggingFacePublisher(AtomicPublisher):
-    def __init__(self, *args, pinned_steps=(), **kwargs):
+    def __init__(self, *args, pinned_steps=(), keep_last=None, **kwargs):
         self.pinned_steps = validate_pins(pinned_steps)
-        super().__init__(*args, **kwargs)
+        if keep_last is not None and (type(keep_last) is not int or keep_last < 1):
+            raise ValueError("Positive recovery retention required")
+        # This wrapper retains pinned epochs as well as the latest recovery.
+        super().__init__(*args, keep_last=max(2, keep_last) if keep_last else None, **kwargs)
+        self.keep_last = keep_last
 
     def __call__(self, checkpoint):
         # Without the explicit destructive opt-in the original protocol retains

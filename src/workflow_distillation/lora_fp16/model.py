@@ -1,4 +1,4 @@
-"""Unquantized frozen FP16 text base, FP32 LoRA and standard AdamW."""
+"""Unquantized frozen 16-bit text base, FP32 LoRA and standard AdamW."""
 
 from functools import partial
 from inspect import unwrap
@@ -12,11 +12,15 @@ def model_kwargs(config):
     return dict(
         pretrained_model_name_or_path=config.model,
         revision=config.revision,
-        dtype="float16",
+        dtype=config.base_dtype,
         device_map=device_plan(32),
         attn_implementation="sdpa",
         local_files_only=True,
     )
+
+
+def scaler_enabled(config):
+    return config.base_dtype == "float16"
 
 
 def build_model(config):
@@ -60,7 +64,7 @@ def build_model(config):
             if "lora_" not in name or parameter.device.type != "cuda":
                 raise RuntimeError("Only text LoRA adapters may train on the local GPU")
             parameter.data = parameter.data.float()
-        elif parameter.is_floating_point() and parameter.dtype != torch.float16:
+        elif parameter.is_floating_point() and parameter.dtype != getattr(torch, config.base_dtype):
             raise RuntimeError(f"Frozen base was upcast: {name}")
     if getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False):
         raise RuntimeError("Quantization is forbidden for this experiment")
@@ -75,6 +79,6 @@ def build_model(config):
         weight_decay=config.weight_decay,
         foreach=False,
     )
-    scaler = torch.amp.GradScaler("cuda", init_scale=8.0)
+    scaler = torch.amp.GradScaler("cuda", init_scale=8.0, enabled=scaler_enabled(config))
     model.train()
     return ModelState(model, decoder, model.get_output_embeddings(), parameters, optimizer, scaler)

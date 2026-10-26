@@ -4,8 +4,9 @@ set -euo pipefail
 TASK_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TASK_VENV="${SFT5090_VENV:-/workspace/venvs/sft5090}"
 TASK_OUTPUT="${SFT5090_OUTPUT:-$TASK_REPO_ROOT/outputs/training/rtx5090_32gb/tqs060-fp16-group-loss}"
-TASK_CONFIG="$TASK_REPO_ROOT/configs/training/gpus/rtx5090_32gb/group_loss.json"
+TASK_CONFIG="${SFT5090_CONFIG:-$TASK_REPO_ROOT/configs/training/gpus/rtx5090_32gb/group_loss.json}"
 TASK_HUB_REPO="${SFT5090_HUB_REPO:-hqcfmlno1/QwenStacy-4b-fp16-tqs060-group-loss-run1}"
+TASK_HUB_PREFIX="${SFT5090_HUB_PREFIX:-fp16-tqs060-group-loss}"
 export HF_HOME="${HF_HOME:-/workspace/.hf_home}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
@@ -48,4 +49,4 @@ TASK_COMMON=(--config "$TASK_CONFIG" --output "$TASK_OUTPUT" "${TASK_EXTRA[@]}")
 "$TASK_VENV/bin/python" -u -m workflow_distillation.lora_fp16 --mode pilot "${TASK_COMMON[@]}"
 exec "$TASK_VENV/bin/python" -m workflow_distillation.lora_fp16.launch \
     "${TASK_COMMON[@]}" "${TASK_TRAIN_ONLY[@]}" \
-    --hub-repo "$TASK_HUB_REPO" --hub-prefix fp16-tqs060-group-loss
+    --hub-repo "$TASK_HUB_REPO" --hub-prefix "$TASK_HUB_PREFIX"

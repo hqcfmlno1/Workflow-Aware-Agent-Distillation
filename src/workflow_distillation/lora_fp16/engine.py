@@ -38,7 +38,7 @@ def trajectory_loss(state, record, config, device):
 
     coefficients = None
     denominator = record["denominator"]
-    if config.loss_normalization == "token_group":
+    if config.loss_normalization in ("token_group", "vanilla"):
         coefficients, denominator = group_loss_parameters(
             record["groups"], config.group_weights, config.length_alpha
         )
@@ -46,7 +46,8 @@ def trajectory_loss(state, record, config, device):
     groups = torch.as_tensor(np.array(record["groups"], dtype=np.int64), device=device)[None]
     labels = ids.masked_fill(groups == 0, -100)
     context = (
-        torch.autocast("cuda", dtype=torch.float16) if device.type == "cuda" else nullcontext()
+        torch.autocast("cuda", dtype=getattr(torch, config.base_dtype))
+        if device.type == "cuda" else nullcontext()
     )
     with context:
         with activation_context(config.activation_storage, config.gpu_budget_bytes):

@@ -39,7 +39,7 @@ class RunConfig:
     def __post_init__(self):
         object.__setattr__(self, "group_weights", tuple(self.group_weights))
         if (
-            self.loss_normalization not in ("token_mean", "token_group")
+            self.loss_normalization not in ("token_mean", "token_group", "vanilla")
             or not math.isfinite(self.length_alpha)
             or not 0 <= self.length_alpha <= 1
             or len(self.group_weights) != 5
@@ -52,10 +52,14 @@ class RunConfig:
             self.length_alpha != 0 or self.group_weights != WEIGHTS
         ):
             raise ValueError("Custom loss settings require token_group normalization")
+        if self.loss_normalization == "vanilla" and (
+            self.length_alpha != 0 or self.group_weights != (0, 1, 1, 1, 1)
+        ):
+            raise ValueError("Vanilla requires equal assistant token weights and length_alpha=0")
         if self.model != MODEL or self.revision != REVISION:
             raise ValueError("Use the pinned Qwen3.5-4B base")
-        if self.base_dtype != "float16" or self.quantization != "none":
-            raise ValueError("This experiment requires an unquantized FP16 base")
+        if self.base_dtype not in ("float16", "bfloat16") or self.quantization != "none":
+            raise ValueError("An unquantized FP16 or BF16 base is required")
         for key in (
             "rank",
             "alpha",
