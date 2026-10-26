@@ -26,6 +26,9 @@ class RunConfig:
     max_grad_norm: float = 1.0
     loss_chunk_size: int = 128
     loss_normalization: str = "token_mean"
+    anchor_beta: float = 0.03
+    span_floor: float = 0.1
+    span_dead_zone: float = 0.05
     length_alpha: float = 0.0
     group_weights: tuple[float, ...] = WEIGHTS
     gdn_backend: str = "fla"
@@ -39,7 +42,8 @@ class RunConfig:
     def __post_init__(self):
         object.__setattr__(self, "group_weights", tuple(self.group_weights))
         if (
-            self.loss_normalization not in ("token_mean", "token_group", "vanilla")
+            self.loss_normalization
+            not in ("token_mean", "token_group", "vanilla", "offline_span_anchor")
             or not math.isfinite(self.length_alpha)
             or not 0 <= self.length_alpha <= 1
             or len(self.group_weights) != 5
@@ -56,6 +60,21 @@ class RunConfig:
             self.length_alpha != 0 or self.group_weights != (0, 1, 1, 1, 1)
         ):
             raise ValueError("Vanilla requires equal assistant token weights and length_alpha=0")
+        if (
+            not math.isfinite(self.anchor_beta)
+            or self.anchor_beta < 0
+            or not math.isfinite(self.span_floor)
+            or not 0 < self.span_floor <= 1
+            or not math.isfinite(self.span_dead_zone)
+            or self.span_dead_zone <= 0
+        ):
+            raise ValueError("Invalid span objective parameters")
+        if self.loss_normalization == "offline_span_anchor" and (
+            self.length_alpha != 0 or self.group_weights != (0, 1, 1, 1, 1)
+        ):
+            raise ValueError(
+                "Span objective requires unit non-reasoning weights, no group length normalization"
+            )
         if self.model != MODEL or self.revision != REVISION:
             raise ValueError("Use the pinned Qwen3.5-4B base")
         if self.base_dtype not in ("float16", "bfloat16") or self.quantization != "none":
