@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import tempfile
 import time
 from pathlib import Path
 
+from workflow_distillation.epoch_data import sha256_file
 from workflow_distillation.lora_fp16.checkpoints import CheckpointManager
+from workflow_distillation.lora_fp16.span_cache import atomic_json
 
 
 class EpochPublisher:
@@ -28,21 +32,7 @@ class EpochPublisher:
         step = manifest["progress"]["global_step"]
         if step not in self.pinned_steps:
             return
-        # Snapshots are immutable on retry, including when Hub accepted a lost response.
-        for name in (
-            "events.jsonl",
-            "train.log",
-            "preflight.json",
-            "hardware.json",
-            "run-config.json",
-            "span-sidecar.json",
-            "scoring-summary.json",
-        ):
-            source = self.output / name
-            if source.is_file() and not (checkpoint / name).exists():
-                shutil.copyfile(source, checkpoint / name)
-        if self.model is not None and not (checkpoint / "adapter_config.json").exists():
-            self.model.save_pretrained(checkpoint, safe_serialization=True)
+        prepare_publication(checkpoint, self.output, self.model)
         for attempt in range(3):
             try:
                 self.publisher(checkpoint)
@@ -111,3 +101,89 @@ class SpanCheckpointManager(CheckpointManager):
     def republish(self, *, model):
         if self.last_step in self.pinned_steps:
             return super().republish(model=model)
+
+
+PUBLICATION_RECEIPT = "epoch-publication.json"
+
+
+def validate_publication(checkpoint):
+    checkpoint = Path(checkpoint)
+    receipt = json.loads((checkpoint / PUBLICATION_RECEIPT).read_text())
+    if receipt.get("complete") is not True:
+        raise ValueError("Incomplete epoch publication snapshot")
+    for name, expected in receipt["file_sha256"].items():
+        if Path(name).name != name or sha256_file(checkpoint / name) != expected:
+            raise ValueError("Corrupt epoch publication snapshot")
+    return receipt
+
+
+def prepare_publication(checkpoint, output, model=None):
+    """Commit a complete immutable log/PEFT snapshot before any Hub upload."""
+    checkpoint, output = Path(checkpoint), Path(output)
+    if (checkpoint / PUBLICATION_RECEIPT).exists():
+        validate_publication(checkpoint)
+        return
+    with tempfile.TemporaryDirectory(prefix=".epoch-export-", dir=checkpoint) as temporary:
+        staging = Path(temporary)
+        names = [
+            "events.jsonl",
+            "train.log",
+            "preflight.json",
+            "hardware.json",
+            "run-config.json",
+            "span-sidecar.json",
+            "scoring-summary.json",
+        ]
+        names.extend(p.name for p in output.glob("train-restored-step-*.log"))
+        for name in names:
+            if (output / name).is_file():
+                shutil.copyfile(output / name, staging / name)
+        if model is not None:
+            from safetensors import safe_open
+
+            model.save_pretrained(staging, safe_serialization=True)
+            json.loads((staging / "adapter_config.json").read_text())
+            with safe_open(staging / "adapter_model.safetensors", framework="pt") as tensors:
+                if not list(tensors.keys()):
+                    raise ValueError("Empty standard PEFT adapter export")
+        files = [p for p in staging.iterdir() if p.is_file()]
+        receipt = {"complete": True, "file_sha256": {p.name: sha256_file(p) for p in files}}
+        for path in files:
+            with path.open("rb") as stream:
+                os.fsync(stream.fileno())
+            path.replace(checkpoint / path.name)
+        fd = os.open(checkpoint, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        atomic_json(checkpoint / PUBLICATION_RECEIPT, receipt)
+
+
+def restore_checkpoint_logs(checkpoint, output):
+    """Restore historical events on a new server without replacing open stdout logs."""
+    checkpoint, output = Path(checkpoint), Path(output)
+    validate_publication(checkpoint)
+    source = checkpoint / "events.jsonl"
+    if not source.is_file():
+        raise ValueError("Hub epoch checkpoint is missing its training event snapshot")
+    output.mkdir(parents=True, exist_ok=True)
+    target = output / "events.jsonl"
+    if target.exists():
+        shutil.copyfile(target, output / f"events.before-hub-resume-{time.time_ns()}.jsonl")
+    temporary = target.with_suffix(".jsonl.tmp")
+    shutil.copyfile(source, temporary)
+    with temporary.open("rb") as stream:
+        os.fsync(stream.fileno())
+    temporary.replace(target)
+    step = json.loads((checkpoint / "manifest.json").read_text())["progress"]["global_step"]
+    # train.log is open by the detached launcher's stdout FD. Preserve that inode;
+    # keep historical stdout separately and include it in the next epoch upload.
+    for old_log in [checkpoint / "train.log", *checkpoint.glob("train-restored-step-*.log")]:
+        if old_log.is_file():
+            name = (
+                f"train-restored-step-{step:08d}.log"
+                if old_log.name == "train.log"
+                else old_log.name
+            )
+            shutil.copyfile(old_log, output / name)

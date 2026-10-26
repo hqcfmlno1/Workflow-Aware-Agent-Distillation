@@ -442,8 +442,13 @@ def execute(args, config, dataset, train, validation, batches, identity, pinned,
             )
             validate_cursor(batches, progress)
             if config.loss_normalization == "offline_span_anchor":
-                from workflow_distillation.lora_fp16.span_run import recover_events
+                from workflow_distillation.lora_fp16.span_run import (
+                    recover_events,
+                    restore_checkpoint_logs,
+                )
 
+                if args.resume == "hub":
+                    restore_checkpoint_logs(manager.last_checkpoint, args.output)
                 recover_events(args.output / "events.jsonl", progress["global_step"])
             manager.republish(model=state.model)
             emit({"event": "resumed", **progress})

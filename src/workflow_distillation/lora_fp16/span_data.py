@@ -13,7 +13,7 @@ import re
 import numpy as np
 
 UPSTREAM_REVISION = "95cdc1d21ce3b590063f6ab9c5bbd3eb25063de5"
-SCORING_VERSION = "coding-span-v1-singleton-unit"
+SCORING_VERSION = "coding-span-v2-section-anchor"
 _BOUNDARY = re.compile(r"(?:\n+|(?<=[.!?;:])[ \t]+)")
 
 
@@ -146,8 +146,13 @@ def prepare_record(messages, tools, tokenizer, expected_ids, groups):
             if a is None
             else [(a + left, a + right) for left, right in segment_reasoning(text[a:b])]
         )
-        if a is not None and b > a:
-            rationale.append((a, b))
+        if a is not None:
+            closing = "\n</think>"
+            if not text.startswith(closing, b):
+                raise ValueError("Unverified reasoning section ending")
+            # Upstream anchors the whole rationale section; the supplied opening
+            # prefix remains masked by the original corpus groups below.
+            rationale.append((a, b + len(closing)))
         calls = [c for c in rendered["action_candidates"] if c["message_index"] == mi]
         ends = [positions.get((mi, f, "end"), 0) for f in ("reasoning_content", "content")]
         ends.extend(c["char_span"][1] for c in calls)

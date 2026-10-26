@@ -13,7 +13,8 @@ This does not implement student-state correction or teacher style editing.
 - Per-trajectory weighted CE, then trajectory mean over actual accumulated batch.
 - Reasoning CE weights .1–1 from action leave-one-out ranks; other target weights 1.
 - Upstream singleton special case: one span gets 1; tied multiple spans get .55.
-- Independent anchor gamma: rationale/envelope 1, other response tokens 1e-6.
+- Independent anchor gamma: whole rationale section (including supervised closing
+  tags) and response envelope 1, other response tokens 1e-6; supplied prefix masked.
 - Target-token k3 anchor beta .03, d clamp [-20,8], FP32 exponent/reductions.
 - Context/user/tool/padding are masked. Action and submit retain separate group labels.
 - One longest-trajectory optimizer update for memory admission; its weights discarded.
@@ -149,8 +150,10 @@ score cache and corpus available on the resumed server.
 Local recovery every 20 completed updates and at safe stop; retain latest recovery
 plus pinned epoch endpoints **295 and 590**. **HF upload only at epoch endpoints**;
 no upload for local recovery. Each epoch upload includes full optimizer/RNG state,
-standard PEFT adapter, run config/identity, sidecar manifest, and snapshots of
+verified standard PEFT adapter, run config/identity, sidecar manifest, and snapshots of
 `events.jsonl`/`train.log`. It never uploads the full base or the training corpus.
+Snapshots are staged with a completion receipt and SHA256 checks before upload;
+interrupted copies/adapter exports are rebuilt, never trusted from file existence.
 No history squashing; only two epoch checkpoints are uploaded.
 
 Upload failures keep the complete local endpoint and previous recovery. Transient
@@ -158,7 +161,10 @@ Upload failures keep the complete local endpoint and previous recovery. Transien
 are not bypassed. If upload still fails, resume the local endpoint to retry before
 another update. Event records newer than the restored cursor are archived under
 `events.before-resume-*.jsonl` and removed from the active curve to avoid duplicate
-completed-update points. Raw `train.log` remains append-only and includes retries.
+completed-update points. Hub resume restores the previous epoch event snapshot
+into the active curve. Raw `train.log` remains append-only on each server; previous
+server stdout is retained as `train-restored-step-*.log` and included in the next
+snapshot, without replacing the live stdout file descriptor.
 
 `events.jsonl` logs each optimizer update: total loss, weighted CE, plain CE,
 anchor and scaled anchor, per-group NLL/count/weight mass, reasoning weight

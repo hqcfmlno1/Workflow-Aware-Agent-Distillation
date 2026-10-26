@@ -87,3 +87,21 @@ def test_character_overlap_weights_do_not_modify_protocol():
         [(0, 2), (2, 6), (6, 8), (8, 8)], [(0, 4), (4, 8)], [0.1, 1.0]
     ) == pytest.approx([0.1, 0.55, 1, 1])
     assert m.token_weights([(0, 4)], [(1, 3)], [0.1]) == pytest.approx([0.55])
+
+
+def test_anchor_covers_verified_reasoning_closing_tag_but_masks_supplied_prefix(tokenizer):  # noqa: F811
+    from workflow_distillation.weighted_sft_data import annotate_record
+
+    m = api()
+    source = record(tokenizer)
+    anno = annotate_record(source, tokenizer)
+    out = m.prepare_record(
+        source["messages"], source["tools"], tokenizer, anno["input_ids"], anno["groups"]
+    )
+    start = out["text"].index("</think>", out["text"].index("The change is verified."))
+    indices = [
+        i for i, (a, b) in enumerate(out["offsets"]) if a < start + len("</think>") and b > start
+    ]
+    assert indices
+    assert all(out["anchor_weights"][i] == pytest.approx(1) for i in indices)
+    assert all(out["anchor_weights"][i] == 0 for i, g in enumerate(anno["groups"]) if g == 0)

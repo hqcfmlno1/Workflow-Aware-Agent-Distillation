@@ -302,3 +302,91 @@ def test_launcher_refuses_used_output_or_stop_before_gpu_calls(tmp_path, marker)
     )
     assert result.returncode != 0
     assert not called.exists()
+
+
+def test_interrupted_log_copy_never_becomes_a_completed_upload(tmp_path, monkeypatch):
+    import shutil
+
+    from workflow_distillation.lora_fp16.span_run import EpochPublisher
+
+    output = tmp_path / "run"
+    output.mkdir()
+    (output / "events.jsonl").write_text("complete event log\n")
+    checkpoint = tmp_path / "checkpoint-00000002"
+    checkpoint.mkdir()
+    (checkpoint / "manifest.json").write_text(json.dumps({"progress": {"global_step": 2}}))
+    uploaded = []
+    publisher = EpochPublisher(
+        lambda path: uploaded.append((path / "events.jsonl").read_text()), [2], output
+    )
+    real_copy = shutil.copyfile
+    interrupted = [False]
+
+    def copy(source, target, *args, **kwargs):
+        if Path(source).name == "events.jsonl" and not interrupted[0]:
+            interrupted[0] = True
+            Path(target).write_text("partial")
+            raise OSError("disk full")
+        return real_copy(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "copyfile", copy)
+    with pytest.raises(OSError, match="disk full"):
+        publisher(checkpoint)
+    assert uploaded == []
+    publisher(checkpoint)
+    assert uploaded == ["complete event log\n"]
+
+
+def test_incomplete_peft_export_is_rebuilt_before_upload(tmp_path):
+    import torch
+    from safetensors.torch import save_file
+
+    from workflow_distillation.lora_fp16.span_run import EpochPublisher
+
+    checkpoint = tmp_path / "checkpoint-00000002"
+    checkpoint.mkdir()
+    (checkpoint / "manifest.json").write_text(json.dumps({"progress": {"global_step": 2}}))
+
+    class Model:
+        attempts = 0
+
+        def save_pretrained(self, path, **kwargs):
+            path = Path(path)
+            path.mkdir(exist_ok=True)
+            (path / "adapter_config.json").write_text("{}")
+            self.attempts += 1
+            if self.attempts == 1:
+                raise OSError("interrupted adapter export")
+            save_file({"lora_A": torch.ones(2, 2)}, str(path / "adapter_model.safetensors"))
+
+    uploaded = []
+    publisher = EpochPublisher(
+        lambda p: uploaded.append((p / "adapter_model.safetensors").is_file()), [2], tmp_path
+    )
+    publisher.model = Model()
+    with pytest.raises(OSError):
+        publisher(checkpoint)
+    publisher(checkpoint)
+    assert publisher.model.attempts == 2 and uploaded == [True]
+
+
+def test_hub_resume_restores_prior_step_curve_and_keeps_old_stdout(tmp_path):
+    from workflow_distillation.lora_fp16 import span_run
+
+    checkpoint = tmp_path / "checkpoint-00000002"
+    checkpoint.mkdir()
+    previous = tmp_path / "previous"
+    previous.mkdir()
+    (checkpoint / "manifest.json").write_text(json.dumps({"progress": {"global_step": 2}}))
+    lines = [dict(event="step", global_step=i, loss=1 / i) for i in [1, 2]]
+    (previous / "events.jsonl").write_text("".join(json.dumps(v) + "\n" for v in lines))
+    (previous / "train.log").write_text("previous server stdout\n")
+    span_run.EpochPublisher(lambda p: None, [2], previous)(checkpoint)
+    output = tmp_path / "new-server"
+    output.mkdir()
+    (output / "events.jsonl").write_text('{"event":"initializing"}\n')
+    span_run.restore_checkpoint_logs(checkpoint, output)
+    span_run.recover_events(output / "events.jsonl", 2)
+    events = [json.loads(v) for v in (output / "events.jsonl").read_text().splitlines()]
+    assert [v["global_step"] for v in events] == [1, 2]
+    assert (output / "train-restored-step-00000002.log").read_text() == "previous server stdout\n"

@@ -1,6 +1,7 @@
 # LoRA với offline action-informed reasoning weights và frozen-base anchor
 
-Trạng thái: đề xuất thí nghiệm, chưa triển khai hoặc chạy GPU. Ngày 2026-10-27.
+Trạng thái: đã triển khai code và kiểm tra CPU; chưa chấm trên GPU hoặc train.
+Ngày 2026-10-27. Code ở branch `sft/offline-span-anchor`.
 
 ## Mục tiêu và phạm vi
 
@@ -150,12 +151,13 @@ Theo rationale mask trong implementation WebKD, dùng role weights:
 
 $$
 \gamma_i=\begin{cases}
-1 & \text{nội dung rationale hoặc response-envelope token},\\
+1 & \text{rationale section (gồm tag) hoặc response-envelope token},\\
 10^{-6} & \text{các supervised response token khác.}
 \end{cases}
 $$
 
-Khi chuyển sang coding, reasoning là rationale; content, action và submit có
+Khi chuyển sang coding, reasoning là rationale, bao gồm tag đóng `</think>` được
+supervise; opening prefix do harness cung cấp vẫn bị mask. Content, action và submit có
 anchor weight $10^{-6}$, còn response-envelope tokens giữ $1$. Cần map envelope
 theo template và lưu mask riêng, không suy ra từ group action/protocol hiện tại.
 Token context/padding vẫn bị loại khỏi cả hai loss. Không có reasoning không đồng
@@ -216,3 +218,15 @@ thêm khoảng 31 MB nếu lưu weight float32 riêng, chưa tính metadata/abla
 Đủ cache/alignment kiểm chứng, estimate chi phí thực tế, config mới riêng và một
 entrypoint resume được. Tài liệu này không cấp lệnh thuê GPU, gọi teacher API,
 train hoặc publish dữ liệu. Không sửa artifacts của những run lịch sử.
+
+## Kết quả chuẩn bị code
+
+CPU export đã đối chiếu đủ 1.180 trajectory với corpus vanilla, có 30.978 turn
+đủ reasoning/action và 188.276 scoring variants; ngoài ra cần 1.180 forward cache
+reference. Đây là số lượt forward, không phải thời gian GPU đã đo.
+
+Rà soát độc lập đã bổ sung: export log/PEFT qua staging và receipt checksum,
+khôi phục events khi resume từ HF, và anchor cả delimiter của rationale như
+upstream. Bản provenance v2 được xuất lại trước khi đóng gói; bản v1 chỉ giữ local
+làm backup, không dùng để score/train. Lệnh server trong
+`configs/training/gpus/rtx5090_32gb/METACURATE_SPAN_ANCHOR.md`.

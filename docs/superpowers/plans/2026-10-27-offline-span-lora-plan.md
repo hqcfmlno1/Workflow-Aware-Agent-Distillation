@@ -16,7 +16,7 @@
 - Rank 32, alpha 64, dropout 0.05; LR 1e-4, warmup 0.05, two epochs, accumulation 4.
 - Span floor 0.1, dead zone 0.05 nats, maximum 24 merged spans/turn, beta 0.03.
 - Reference is frozen raw base; score offline once; no teacher calls or executed actions.
-- Adaptive CE weights apply only to rendered inner reasoning. Anchor weights are 1 on rationale/envelope and 1e-6 on other supervised response tokens; action and submit remain distinct.
+- Adaptive CE weights apply only to rendered inner reasoning. Anchor weights are 1 on whole rationale sections (including tags)/envelope and 1e-6 on other supervised response tokens; action and submit remain distinct.
 - Preserve trajectory-mean reduction; no hidden holdout, truncation or altered historical artifacts.
 - Local latest recovery plus epoch endpoints; HF uploads at epoch endpoints only.
 - This is a plan, not authorization to start a GPU instance or spend on scoring/training.
@@ -82,7 +82,8 @@
 
 ## Self-review and handoff
 
+Implementation completed and CPU-verified on 2026-10-27; GPU admission remains a server-time step.
+
 Spec coverage checked: scoring, exact alignment/omission, reference cache, formulas,
 reduction, memory, cost estimate, logs, checkpoints and comparison all have owning
-tasks. Review Focus conditions are covered by the named task tests. No training,
-API call, code implementation, commit or push was performed in preparing this plan.
+tasks. Review Focus conditions are covered by the named task tests. At initial plan authoring, no training, API call, implementation, commit or push was performed.
