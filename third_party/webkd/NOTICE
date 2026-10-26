@@ -1,0 +1,7 @@
+WebKD: https://github.com/sparklabutah/webKD
+Upstream revision: 95cdc1d21ce3b590063f6ab9c5bbd3eb25063de5
+Authors: Ashraful Huque Ishmam and Kenneth Marino.
+Licensed under Apache License 2.0 (included in LICENSE).
+span_data.py adapts segmentation and rank/dead-zone weighting semantics from
+src/webkd/action_informativeness.py. Coding serialization, offline reference cache
+and trainer integration are additions in this project; this is not full WebKD.
