@@ -178,5 +178,42 @@ Copy logs back with normal scp; do not publish experiment logs to Git:
 scp -P PORT root@HOST:/workspace/Workflow-Aware-Agent-Distillation/outputs/training/rtx5090_32gb/metacurate1180-bf16-span-anchor-run1/events.jsonl ./events-span-anchor.jsonl
 ```
 
-No real GPU scoring/training or HF publication has been performed by preparing
-this code. Runtime, memory headroom and cost must be measured on the rented GPU.
+## Cached scoring profile (2026-10-27)
+
+The separately identified `metacurate_span_anchor_bf16_cached.json` keeps the
+objective, segmentation, BF16 weights and unchanged-context reference probabilities.
+It advances one unablated teacher-history cache between turns and deep-copies all
+KV/convolution/recurrent state for each ablation. Only the original prefix and one
+branch are resident. Complete variant tokenization is checked before forwarding.
+Singleton turns receive the existing constant weight 1 without diagnostic logps.
+
+The original full-prefill score output is preserved. Cached scoring writes to
+`data/processed/metacurate1180_span_scores_cached/`, with its own software/config
+identity. It may reuse only original reference arrays after exact source identity
+and sample-hash validation; full-prefill span scores are never mixed into it.
+
+Measured on RTX 5090, one 35,690-token / 24-span turn took 58.93 seconds full versus
+7.68 seconds cached; peak allocated 10.76 GiB, reserved 12.42 GiB. **Numerical parity
+failed:** BF16 action mean logp differed by up to .00604 nats, changing some span
+weights by .50870. The user explicitly chose to rescore the entire pool separately
+with cache after seeing this result. This is not bitwise-equivalent scoring.
+Two successive shorter turns exercised history reuse on GPU and had identical
+weights to full scoring. None of these timings alone predicts full-pool duration.
+
+Resume cached scoring directly (use supervisor on the current Vast image):
+
+```bash
+export PYTHONPATH=src:.
+/venv/main/bin/python -u -m scripts.training.score_span_lora \
+  --config configs/training/gpus/rtx5090_32gb/metacurate_span_anchor_bf16_cached.json \
+  --output data/processed/metacurate1180_span_scores_cached \
+  --reuse-reference-cache data/processed/metacurate1180_span_scores \
+  --max-seconds 172800
+```
+
+On the active server, `/workspace/server-run-span.sh` uses this profile and will
+perform the one-longest admission followed by training once scoring is complete.
+It is managed by `workflow-span-run`; the initial timing subset is managed by
+`workflow-span-measure`. Follow `/workspace/span-cache-measure.log` during the
+subset and `/workspace/span-pipeline.log` afterwards. Scoring remains resumable at
+each completed variant; training does not start from a partial score index.

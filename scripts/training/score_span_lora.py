@@ -15,11 +15,15 @@ from workflow_distillation.epoch_data import sha256_file
 from workflow_distillation.lora_fp16.config import RunConfig
 from workflow_distillation.lora_fp16.metacurate import load_corpus
 from workflow_distillation.lora_fp16.span_cache import ScoreStore, atomic_json
+from workflow_distillation.lora_fp16.span_cached_scoring import (
+    PrefixScorer,
+    reference_identity,
+    reference_source,
+)
 from workflow_distillation.lora_fp16.span_data import token_weights
 from workflow_distillation.lora_fp16.span_scoring import (
     build_reference,
     cache_reference,
-    reference_identity,
     score_turn,
 )
 from workflow_distillation.training.events import EventLog
@@ -51,6 +55,7 @@ def main(argv=None):
         "--output", type=Path, default=ROOT / "data/processed/metacurate1180_span_scores"
     )
     p.add_argument("--estimate", action="store_true")
+    p.add_argument("--reuse-reference-cache", type=Path)
     p.add_argument(
         "--limit-turns", type=int, help="Stop scoring after N new turns; partial cache cannot train"
     )
@@ -59,6 +64,8 @@ def main(argv=None):
     if args.max_seconds < 1 or (args.limit_turns is not None and args.limit_turns < 1):
         p.error("Positive limits required")
     config = RunConfig(**json.loads(args.config.read_text()))
+    if args.reuse_reference_cache and config.span_scoring_backend != "prefix-cache":
+        p.error("Reference-only migration requires prefix-cache backend")
     corpus, _ = load_corpus(args.index, json.loads(args.selection.read_text()))
     manifest = json.loads(args.provenance.read_text())
     if manifest["corpus_sha256"] != sha256_file(args.index):
@@ -86,6 +93,16 @@ def main(argv=None):
         return
     identity = reference_identity(config, sha256_file(args.provenance))
     store = ScoreStore(args.output, sha256_file(args.index), identity)
+    original_references = (
+        reference_source(
+            args.reuse_reference_cache,
+            config,
+            sha256_file(args.index),
+            sha256_file(args.provenance),
+        )
+        if args.reuse_reference_cache
+        else None
+    )
     emit = EventLog(args.output / "scoring.jsonl", "span-offline")
     with (args.output / ".score.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -103,6 +120,11 @@ def main(argv=None):
             max_seconds=args.max_seconds, margin_seconds=30, expected_step_seconds=30
         ) as budget:
             state = build_reference(config)
+            cached_scorer = (
+                PrefixScorer(state, tokenizer, config.span_prefill_chunk_tokens)
+                if config.span_scoring_backend == "prefix-cache"
+                else None
+            )
             turns_done = 0
             for i, row in enumerate(manifest["data"]):
                 if budget.should_stop():
@@ -112,6 +134,8 @@ def main(argv=None):
                 ids, groups = sample["input_ids"], sample["groups"]
                 if store.read_record(i, ids, groups) is not None:
                     continue
+                if cached_scorer is not None:
+                    cached_scorer.reset()
                 with gzip.open(args.provenance.parent / row["file"], "rt") as stream:
                     source = json.load(stream)
                 if (
@@ -120,6 +144,17 @@ def main(argv=None):
                 ):
                     raise ValueError("Scoring tokenizer differs from immutable corpus")
                 q = store.read_reference(i, ids, groups)
+                if q is None and original_references is not None:
+                    q = original_references.read_reference(i, ids, groups)
+                    if q is not None:
+                        store.write_reference(i, ids, groups, q)
+                        emit(
+                            dict(
+                                event="reference_reused",
+                                record=i,
+                                source=str(args.reuse_reference_cache),
+                            )
+                        )
                 if q is None:
                     tick = time.monotonic()
                     q = cache_reference(state, ids, groups, config.loss_chunk_size)
@@ -163,9 +198,12 @@ def main(argv=None):
 
                         tick = time.monotonic()
                         try:
-                            result = score_turn(
-                                state,
-                                tokenizer,
+                            scorer = (
+                                cached_scorer.score_turn
+                                if cached_scorer is not None
+                                else lambda turn, **kw: score_turn(state, tokenizer, turn, **kw)
+                            )
+                            result = scorer(
                                 dict(turn, text=source["text"]),
                                 floor=config.span_floor,
                                 dead_zone=config.span_dead_zone,
@@ -187,6 +225,7 @@ def main(argv=None):
                                 seconds=time.monotonic() - tick,
                                 new_turns=turns_done,
                                 weights=result["weights"],
+                                cache_stats=dict(cached_scorer.stats) if cached_scorer else None,
                             )
                         )
                     weighted_spans.extend(turn["spans"])

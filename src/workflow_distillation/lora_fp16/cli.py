@@ -84,7 +84,7 @@ def prepare(config, index, selection_path=None, span_sidecar=None):
         if span_sidecar is None:
             raise ValueError("The span objective requires a complete --span-sidecar")
         from workflow_distillation.lora_fp16.span_cache import SpanDataset, load_sidecar
-        from workflow_distillation.lora_fp16.span_scoring import reference_identity
+        from workflow_distillation.lora_fp16.span_cached_scoring import reference_identity
 
         sidecar_path = Path(span_sidecar)
         sidecar_manifest = json.loads((sidecar_path / "index.json").read_text())

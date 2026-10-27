@@ -29,6 +29,8 @@ class RunConfig:
     anchor_beta: float = 0.03
     span_floor: float = 0.1
     span_dead_zone: float = 0.05
+    span_scoring_backend: str = "full"
+    span_prefill_chunk_tokens: int = 2048
     length_alpha: float = 0.0
     group_weights: tuple[float, ...] = WEIGHTS
     gdn_backend: str = "fla"
@@ -41,6 +43,10 @@ class RunConfig:
 
     def __post_init__(self):
         object.__setattr__(self, "group_weights", tuple(self.group_weights))
+        if self.span_scoring_backend not in ("full", "prefix-cache") or (
+            type(self.span_prefill_chunk_tokens) is not int or self.span_prefill_chunk_tokens < 1
+        ):
+            raise ValueError("Invalid span scoring backend/prefill chunk")
         if (
             self.loss_normalization
             not in ("token_mean", "token_group", "vanilla", "offline_span_anchor")
