@@ -1,0 +1,89 @@
+{
+  "date": "2026-10-27",
+  "records": 1180,
+  "counters": {
+    "omitted_messages": 400,
+    "eligible": 30978,
+    "joint_multicall_turns": 5252,
+    "submit_scored_turns": 1163,
+    "records": 1180,
+    "no_rendered_reasoning": 993
+  },
+  "omitted_records": 30,
+  "eligible_turns": 30978,
+  "eligible_spans": 157298,
+  "eligible_mean_spans_per_turn": 5.077732584414746,
+  "eligible_span_histogram": {
+    "1": 12013,
+    "2": 5382,
+    "3": 2313,
+    "4": 1749,
+    "5": 1409,
+    "6": 1146,
+    "7": 807,
+    "8": 660,
+    "9": 504,
+    "10": 460,
+    "11": 354,
+    "12": 304,
+    "13": 258,
+    "14": 276,
+    "15": 252,
+    "16": 202,
+    "17": 188,
+    "18": 172,
+    "19": 166,
+    "20": 135,
+    "21": 141,
+    "22": 128,
+    "23": 111,
+    "24": 1848
+  },
+  "span_character_quantiles": {
+    "min": 11.0,
+    "median": 79.0,
+    "p90": 165.0,
+    "p99": 351.0,
+    "max": 967.0
+  },
+  "span_token_overlap_quantiles": {
+    "min": 3.0,
+    "median": 20.0,
+    "p90": 44.0,
+    "p99": 99.0,
+    "max": 335.0
+  },
+  "eligible_turns_requiring_cap": 1748,
+  "max_eligible_spans_before_cap": 193,
+  "provenance_sha256": "129d8603b505bc6131a26bf53d9f0ded0490091e787e72931ce0206d3510798c",
+  "source_sha256": {
+    "span_data.py": "1de43b85a62bce149eb5ad9973aba54d5ecdf934d0bf6ac75c460003b6b3c843",
+    "span_scoring.py": "c62250a090b8304d18ae11711097cfef859fe3aee6302e5b5e4cc6c53216b5fb",
+    "span_cached_scoring.py": "6e7ced8f989559e7dd24b196b280b334ccc59831610c4fdcce2c2cf1622c578b"
+  },
+  "upstream_revision": "95cdc1d21ce3b590063f6ab9c5bbd3eb25063de5",
+  "upstream_source_sha256": "2085c4c6173b8e408abb8d67871556d588723df8b6a2a3e7af7dd86ac0d37bd5",
+  "checks": [
+    "All provenance file hashes and original corpus hashes",
+    "Exact rendered token IDs and offsets for every record",
+    "All original action prefixes and target IDs",
+    "Span partition, nonempty bounds, field membership and unchanged closing tags",
+    "Every exported span agrees with local splitter and pinned upstream",
+    "Rank/dead-zone edge cases match pinned upstream",
+    "33 focused CPU tests passed; no additional GPU forwards"
+  ],
+  "live_sidecar_audit": {
+    "checked_complete_records": 148,
+    "checked_turns": 4100,
+    "checked_supervised_tokens": 944315,
+    "token_weight_max_abs_error": 0,
+    "reference_and_anchor_exact": true,
+    "seconds": 2.3059492483735085,
+    "scope": "Completed cached records present at audit start; independent vectorized character-overlap mapping; no GPU forwards; active job unchanged."
+  },
+  "limitations": [
+    "Heuristic segmentation is not semantic or code-aware",
+    "Full/cached BF16 numerical parity failed previously; separate rescoring was explicitly authorized",
+    "GPU cache state is rebuilt on resume; bitwise reproducibility at partial-turn interruption was not audited"
+  ]
+}

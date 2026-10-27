@@ -1,6 +1,7 @@
 # LoRA với offline action-informed reasoning weights và frozen-base anchor
 
-Trạng thái: đã triển khai code và kiểm tra CPU; chưa chấm trên GPU hoặc train.
+Trạng thái: đã triển khai, kiểm tra CPU/GPU và đang chấm offline trên Vast bằng
+profile cache riêng; training chờ scoring hoàn tất.
 Ngày 2026-10-27. Code ở branch `sft/offline-span-anchor`.
 
 ## Mục tiêu và phạm vi
@@ -33,7 +34,9 @@ chưa xử lý trực tiếp exposure bias trên các state do student tự tạ
 
 LR được giữ để cô lập thay đổi objective; đây không phải khẳng định LR tối ưu.
 Dataset index SHA256: `25ba49de9761df40cc9ed0ecb8568a8e02a71f9c59fc1029303e968d604eeebc`.
-Nguồn cấu hình: `configs/training/gpus/rtx5090_32gb/metacurate_bf16.json`.
+Nguồn cấu hình baseline: `configs/training/gpus/rtx5090_32gb/metacurate_bf16.json`.
+Profile đang chấm là `metacurate_span_anchor_bf16_cached.json` trong cùng thư mục;
+giữ loss đã duyệt và lưu span scores riêng với scorer full trước đó.
 
 Giữ nguyên token IDs, masks và thứ tự shuffle của corpus vanilla. Audit hiện tại
 có 30 trajectory bị official template bỏ reasoning ở một số message. Chỉ reasoning
@@ -60,10 +63,12 @@ sequence, teacher forcing; không sinh action, không thực thi tool. Nếu tur
 tool calls, action là toàn bộ block từ call đầu đến call cuối, gồm separator ở giữa.
 Submit vẫn là group riêng, cũng có thể là action dùng để score reasoning trước nó.
 
-Tách reasoning theo câu/newline, gộp fragment dưới 24 ký tự không trắng, tối đa
-24 span/turn bằng gộp cặp span kề nhau ngắn nhất; không cắt bỏ text. Tie khi chọn
-cặp thì chọn cặp bên trái. Dùng sentence/newline splitter và rank semantics của
-public WebKD code làm hợp đồng, pin revision khi triển khai.
+Quy tắc đầy đủ, ví dụ và giới hạn được ghi tại
+[Cách chia và chấm reasoning span](reasoning_span_segmentation_2026-10-27.md).
+Splitter dùng regex newline hoặc space/tab sau `. ! ? ; :`; đây là quy tắc ký tự,
+không phải tách theo ngữ nghĩa. Fragment dưới 24 ký tự không trắng được gộp;
+tối đa 24 span **mỗi turn**, không phải 24 token/span. Khi vượt giới hạn, gộp cặp
+kề nhau có tổng độ dài không trắng nhỏ nhất, tie chọn cặp bên trái; giữ toàn bộ text.
 
 Với average rank chuẩn hóa $u_s\in[0,1]$, đặt độ chênh lệch score:
 
@@ -82,6 +87,8 @@ $$
 turn chỉ có một span nhận $v_s=1$; nhiều span có cùng score nhận $v_s=0.55$.
 Trường hợp singleton là special case của code, đính chính mô tả midpoint trong draft. Không hard-mask $\Delta_s$ âm.
 Đây là relative ranking trong turn; score cao không chứng minh reasoning đúng.
+Ngưỡng $\tau$ co rank theo spread của cả turn, không gộp các cặp score gần nhau
+thành tie. Sai khác số học có thể đổi thứ hạng, kể cả khi log-prob thay đổi ít.
 Nếu turn không có action, reasoning giữ weight 1 và được ghi `no_action_unscored`;
 không gán score giả. Turn không có rendered reasoning không cần ablation.
 

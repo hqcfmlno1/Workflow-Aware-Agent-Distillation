@@ -24,6 +24,13 @@ The exact design, limitations and formula are in
 [the research spec](../../../../docs/research/offline_span_lora_design_2026-10-27.md).
 Public upstream segmentation/rank revision is pinned in `third_party/webkd/NOTICE`.
 
+The exact segmentation procedure, worked example, ablation/token mapping and
+known numerical limitations are documented in
+[Cách chia và chấm reasoning span](../../../../docs/research/reasoning_span_segmentation_2026-10-27.md).
+The limits are **24 non-whitespace characters for merging short fragments** and
+**24 spans per assistant turn**, not 24 tokens per span. This is a punctuation/newline
+heuristic, not a semantic or code-aware splitter.
+
 ## Local preparation (CPU, already exported)
 
 ```bash
