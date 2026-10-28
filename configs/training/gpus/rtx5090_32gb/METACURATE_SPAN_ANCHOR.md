@@ -87,18 +87,34 @@ Set `SFT5090_HUB_REPO` to override the dedicated new default repo.
 
 ## Offline scoring: stop and resume
 
+The launcher now defaults to the accepted **prefix-cache BF16 profile** and
+`metacurate1180_span_scores_cached/`. It does not mix the older full-prefill span
+scores into this cache. To explicitly reproduce the older profile, set both
+`SFT5090_CONFIG` to `metacurate_span_anchor_bf16.json` and `SFT5090_SCORES` to a
+separate full-prefill output directory.
+
 CPU-only estimate:
 
 ```bash
 bash scripts/training/run_metacurate_span_anchor.sh --stage estimate
 ```
 
-Use tmux for scoring so SSH disconnect does not terminate the job. Optionally
-measure three new turns before paying for the full corpus:
+On Vast, use supervisor with `stopasgroup=true`, `killasgroup=true`,
+`stopwaitsecs=600`, and `autorestart=false`. For the existing accepted cache,
+resume the remaining scoring and then enter training with one command:
 
 ```bash
-bash scripts/training/run_metacurate_span_anchor.sh --stage score --limit-turns 3
+bash scripts/training/run_metacurate_span_anchor.sh --stage all --foreground --max-seconds 28800
 ```
+
+`all` reuses completed record/turn/variant files, refuses to train without a
+complete sidecar, runs CPU preflight, performs one longest-trajectory admission
+only if a matching pilot is absent, and then executes training in the foreground
+so supervisor owns its process. A complete score index is validated by preflight
+without reloading the scoring model. On a later restart, `all` automatically uses
+the local latest training checkpoint when it exists. It stops on a `STOP` marker
+or failed upload; it does not silently restart failed training. `--max-seconds`
+applies separately to scoring and training, not to the sum of both stages.
 
 Continue all remaining scores (same command also resumes after interruption):
 
@@ -113,8 +129,8 @@ A killed process can repeat at most the in-flight forward. Partial caches have
 no completed final index and cannot enter training. Scoring and training lock
 files prevent concurrent writers to the same output.
 
-Score output: `data/processed/metacurate1180_span_scores/`.
-Log: `tail -F data/processed/metacurate1180_span_scores/scoring.log`.
+Score output: `data/processed/metacurate1180_span_scores_cached/`.
+Log: `tail -F data/processed/metacurate1180_span_scores_cached/scoring.log`.
 `scoring.jsonl` contains per-forward/turn timings; `summary.json` records total cost.
 Software/model/template/corpus/scorer identity changes reject old caches rather
 than mixing scores. Do not edit scoring files after a cache is started.
@@ -214,13 +230,15 @@ export PYTHONPATH=src:.
 /venv/main/bin/python -u -m scripts.training.score_span_lora \
   --config configs/training/gpus/rtx5090_32gb/metacurate_span_anchor_bf16_cached.json \
   --output data/processed/metacurate1180_span_scores_cached \
-  --reuse-reference-cache data/processed/metacurate1180_span_scores \
   --max-seconds 172800
 ```
 
-On the active server, `/workspace/server-run-span.sh` uses this profile and will
-perform the one-longest admission followed by training once scoring is complete.
-It is managed by `workflow-span-run`; the initial timing subset is managed by
-`workflow-span-measure`. Follow `/workspace/span-cache-measure.log` during the
-subset and `/workspace/span-pipeline.log` afterwards. Scoring remains resumable at
-each completed variant; training does not start from a partial score index.
+The old full-prefill directory is optional: `--reuse-reference-cache` is only
+needed to import already computed original reference logps. Restored cached
+snapshots already contain their reference arrays; missing remaining references
+are computed normally. Do not require an old directory on a replacement server.
+
+The deployment wrapper `/workspace/server-run-span.sh` should invoke the tracked
+`--stage all --foreground` command above. Follow `/workspace/span-pipeline.log`
+for scoring and the run's `train.log` once training starts. Scoring remains
+resumable at each completed variant; training never starts from a partial index.

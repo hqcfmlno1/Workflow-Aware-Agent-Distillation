@@ -304,6 +304,93 @@ def test_launcher_refuses_used_output_or_stop_before_gpu_calls(tmp_path, marker)
     assert not called.exists()
 
 
+def launch_with_fake_python(tmp_path, args, **environment):
+    import os
+    import subprocess
+
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    calls = tmp_path / "calls.jsonl"
+    fake = venv / "bin/python"
+    fake.write_text(
+        "#!/usr/bin/python3\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "with open(os.environ['SPAN_TEST_CALLS'], 'a') as f:\n"
+        "    f.write(json.dumps(sys.argv[1:])+'\\n')\n"
+        "if 'scripts.training.score_span_lora' in sys.argv:\n"
+        "    if os.environ.get('SPAN_TEST_SCORE_EXIT'):\n"
+        "        sys.exit(int(os.environ['SPAN_TEST_SCORE_EXIT']))\n"
+        "    if os.environ.get('SPAN_TEST_FINISH') == '1':\n"
+        "        p=Path(sys.argv[sys.argv.index('--output')+1])\n"
+        "        (p/'index.json').write_text('{}')\n"
+    )
+    fake.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "scripts/training/run_metacurate_span_anchor.sh", *args],
+        env={
+            **os.environ,
+            "SFT5090_VENV": str(venv),
+            "SFT5090_OUTPUT": str(tmp_path / "run"),
+            "SFT5090_SCORES": str(tmp_path / "scores_cached"),
+            "SPAN_TEST_CALLS": str(calls),
+            **environment,
+        },
+        text=True,
+        capture_output=True,
+    )
+    invocations = [json.loads(line) for line in calls.read_text().splitlines()]
+    return result, invocations
+
+
+def test_launcher_defaults_to_cached_scoring_and_keeps_explicit_full_override(tmp_path):
+    result, calls = launch_with_fake_python(tmp_path, ["--stage", "estimate"])
+    assert result.returncode == 0
+    assert calls[0][calls[0].index("--config") + 1].endswith(
+        "metacurate_span_anchor_bf16_cached.json"
+    )
+    other = tmp_path / "full"
+    other.mkdir()
+    result, calls = launch_with_fake_python(
+        other, ["--stage", "estimate"], SFT5090_CONFIG="/explicit/full.json"
+    )
+    assert result.returncode == 0
+    assert calls[0][calls[0].index("--config") + 1] == "/explicit/full.json"
+
+
+@pytest.mark.parametrize("score_exit", ["0", "7"])
+def test_pipeline_never_starts_training_after_partial_or_failed_scoring(tmp_path, score_exit):
+    result, calls = launch_with_fake_python(
+        tmp_path, ["--stage", "all", "--foreground"], SPAN_TEST_SCORE_EXIT=score_exit
+    )
+    assert result.returncode != 0
+    assert len(calls) == 1
+    assert "scripts.training.score_span_lora" in calls[0]
+
+
+def test_pipeline_transitions_to_supervised_training_after_complete_scoring(tmp_path):
+    (tmp_path / "run").mkdir()
+    result, calls = launch_with_fake_python(
+        tmp_path, ["--stage", "all", "--foreground"], SPAN_TEST_FINISH="1"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "scripts.training.score_span_lora" in calls[0]
+    assert calls[-1][:5] == ["-u", "-m", "workflow_distillation.lora_fp16", "--mode", "train"]
+    assert "workflow_distillation.lora_fp16.launch" not in str(calls)
+    assert calls[-1][calls[-1].index("--span-sidecar") + 1] == str(tmp_path / "scores_cached")
+
+
+def test_pipeline_reuses_completed_scores_and_resumes_local_checkpoint(tmp_path):
+    (tmp_path / "run/checkpoints").mkdir(parents=True)
+    (tmp_path / "run/checkpoints/latest.json").write_text("{}")
+    (tmp_path / "scores_cached").mkdir()
+    (tmp_path / "scores_cached/index.json").write_text("{}")
+    result, calls = launch_with_fake_python(tmp_path, ["--stage", "all", "--foreground"])
+    assert result.returncode == 0, result.stderr
+    assert "scripts.training.score_span_lora" not in str(calls)
+    assert calls[-1][calls[-1].index("--resume") + 1] == "latest"
+
+
 def test_interrupted_log_copy_never_becomes_a_completed_upload(tmp_path, monkeypatch):
     import shutil
 
