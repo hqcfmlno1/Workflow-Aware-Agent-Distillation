@@ -1,0 +1,217 @@
+{
+  "name": "verified20-span-anchor-pilot",
+  "date": "2026-10-28",
+  "purpose": "Fixed diagnostic comparison for base, vanilla SFT, and offline-span-anchor LoRA; not a representative full-benchmark score estimate.",
+  "dataset": "princeton-nlp/SWE-bench_Verified",
+  "dataset_revision": "c104f840cc67f8b6eec6f759ebc8b2693d585d4a",
+  "split": "test",
+  "full_dataset_count": 500,
+  "full_dataset_sha256": "e0afd44653d31d3da6adc5b04bb3af38800cd9aec13af6c21bd93d012d008076",
+  "seed": 42,
+  "selection_method": "One task per eligible repo; allocate remaining 8 proportionally by repo counts with largest remainders (lexicographic repo ties). Within each repo take lowest SHA256 of UTF-8 f\"42:{repo}:{instance_id}\". Sort selected IDs lexicographically.",
+  "used_for_selection": [
+    "instance_id",
+    "repo",
+    "training_task_ids"
+  ],
+  "not_used_for_selection": [
+    "model_results",
+    "gold_patch",
+    "test_patch",
+    "difficulty",
+    "problem_length"
+  ],
+  "training_exclusion": {
+    "index": "data/processed/metacurate1180_vanilla/index.json",
+    "index_sha256": "25ba49de9761df40cc9ed0ecb8568a8e02a71f9c59fc1029303e968d604eeebc",
+    "trajectories": 1180,
+    "unique_tasks": 477,
+    "verified_overlap_count": 0,
+    "selected_overlap_count": 0
+  },
+  "count": 20,
+  "repository_counts": {
+    "astropy/astropy": 1,
+    "django/django": 5,
+    "matplotlib/matplotlib": 2,
+    "mwaskom/seaborn": 1,
+    "pallets/flask": 1,
+    "psf/requests": 1,
+    "pydata/xarray": 1,
+    "pylint-dev/pylint": 1,
+    "pytest-dev/pytest": 1,
+    "scikit-learn/scikit-learn": 2,
+    "sphinx-doc/sphinx": 2,
+    "sympy/sympy": 2
+  },
+  "difficulty_counts": {
+    "1-4 hours": 2,
+    "15 min - 1 hour": 10,
+    "<15 min fix": 8
+  },
+  "instance_ids": [
+    "astropy__astropy-13579",
+    "django__django-12155",
+    "django__django-14140",
+    "django__django-14855",
+    "django__django-15863",
+    "django__django-16082",
+    "matplotlib__matplotlib-24177",
+    "matplotlib__matplotlib-24970",
+    "mwaskom__seaborn-3069",
+    "pallets__flask-5014",
+    "psf__requests-2317",
+    "pydata__xarray-6461",
+    "pylint-dev__pylint-6528",
+    "pytest-dev__pytest-10356",
+    "scikit-learn__scikit-learn-14053",
+    "scikit-learn__scikit-learn-9288",
+    "sphinx-doc__sphinx-7985",
+    "sphinx-doc__sphinx-8721",
+    "sympy__sympy-18211",
+    "sympy__sympy-20916"
+  ],
+  "ids_file_sha256": "b37208bd09d8e8f21eee7e4e90c70a778122b7054a8c5f989c07e8d43f528c2a",
+  "tasks": [
+    {
+      "instance_id": "astropy__astropy-13579",
+      "repo": "astropy/astropy",
+      "base_commit": "0df94ff7097961e92fd7812036a24b145bc13ca8",
+      "version": "5.0",
+      "difficulty": "1-4 hours"
+    },
+    {
+      "instance_id": "django__django-12155",
+      "repo": "django/django",
+      "base_commit": "e8fcdaad5c428878d0a5d6ba820d957013f75595",
+      "version": "3.1",
+      "difficulty": "15 min - 1 hour"
+    },
+    {
+      "instance_id": "django__django-14140",
+      "repo": "django/django",
+      "base_commit": "45814af6197cfd8f4dc72ee43b90ecde305a1d5a",
+      "version": "4.0",
+      "difficulty": "15 min - 1 hour"
+    },
+    {
+      "instance_id": "django__django-14855",
+      "repo": "django/django",
+      "base_commit": "475cffd1d64c690cdad16ede4d5e81985738ceb4",
+      "version": "4.0",
+      "difficulty": "<15 min fix"
+    },
+    {
+      "instance_id": "django__django-15863",
+      "repo": "django/django",
+      "base_commit": "37c5b8c07be104fd5288cd87f101e48cb7a40298",
+      "version": "4.2",
+      "difficulty": "<15 min fix"
+    },
+    {
+      "instance_id": "django__django-16082",
+      "repo": "django/django",
+      "base_commit": "bf47c719719d0e190a99fa2e7f959d5bbb7caf8a",
+      "version": "4.2",
+      "difficulty": "15 min - 1 hour"
+    },
+    {
+      "instance_id": "matplotlib__matplotlib-24177",
+      "repo": "matplotlib/matplotlib",
+      "base_commit": "493d608e39d32a67173c23a7bbc47d6bfedcef61",
+      "version": "3.6",
+      "difficulty": "<15 min fix"
+    },
+    {
+      "instance_id": "matplotlib__matplotlib-24970",
+      "repo": "matplotlib/matplotlib",
+      "base_commit": "a3011dfd1aaa2487cce8aa7369475533133ef777",
+      "version": "3.6",
+      "difficulty": "15 min - 1 hour"
+    },
+    {
+      "instance_id": "mwaskom__seaborn-3069",
+      "repo": "mwaskom/seaborn",
+      "base_commit": "54cab15bdacfaa05a88fbc5502a5b322d99f148e",
+      "version": "0.12",
+      "difficulty": "15 min - 1 hour"
+    },
+    {
+      "instance_id": "pallets__flask-5014",
+      "repo": "pallets/flask",
+      "base_commit": "7ee9ceb71e868944a46e1ff00b506772a53a4f1d",
+      "version": "2.3",
+      "difficulty": "<15 min fix"
+    },
+    {
+      "instance_id": "psf__requests-2317",
+      "repo": "psf/requests",
+      "base_commit": "091991be0da19de9108dbe5e3752917fea3d7fdc",
+      "version": "2.4",
+      "difficulty": "<15 min fix"
+    },
+    {
+      "instance_id": "pydata__xarray-6461",
+      "repo": "pydata/xarray",
+      "base_commit": "851dadeb0338403e5021c3fbe80cbc9127ee672d",
+      "version": "2022.03",
+      "difficulty": "<15 min fix"
+    },
+    {
+      "instance_id": "pylint-dev__pylint-6528",
+      "repo": "pylint-dev/pylint",
+      "base_commit": "273a8b25620467c1e5686aa8d2a1dbb8c02c78d0",
+      "version": "2.14",
+      "difficulty": "15 min - 1 hour"
+    },
+    {
+      "instance_id": "pytest-dev__pytest-10356",
+      "repo": "pytest-dev/pytest",
+      "base_commit": "3c1534944cbd34e8a41bc9e76818018fadefc9a1",
+      "version": "7.2",
+      "difficulty": "1-4 hours"
+    },
+    {
+      "instance_id": "scikit-learn__scikit-learn-14053",
+      "repo": "scikit-learn/scikit-learn",
+      "base_commit": "6ab8c86c383dd847a1be7103ad115f174fe23ffd",
+      "version": "0.22",
+      "difficulty": "15 min - 1 hour"
+    },
+    {
+      "instance_id": "scikit-learn__scikit-learn-9288",
+      "repo": "scikit-learn/scikit-learn",
+      "base_commit": "3eacf948e0f95ef957862568d87ce082f378e186",
+      "version": "0.22",
+      "difficulty": "15 min - 1 hour"
+    },
+    {
+      "instance_id": "sphinx-doc__sphinx-7985",
+      "repo": "sphinx-doc/sphinx",
+      "base_commit": "f30284ef926ebaf04b176f21b421e2dffc679792",
+      "version": "3.2",
+      "difficulty": "15 min - 1 hour"
+    },
+    {
+      "instance_id": "sphinx-doc__sphinx-8721",
+      "repo": "sphinx-doc/sphinx",
+      "base_commit": "82ef497a8c88f0f6e50d84520e7276bfbf65025d",
+      "version": "3.5",
+      "difficulty": "<15 min fix"
+    },
+    {
+      "instance_id": "sympy__sympy-18211",
+      "repo": "sympy/sympy",
+      "base_commit": "b4f1aa3540fe68d078d76e78ba59d022dd6df39f",
+      "version": "1.6",
+      "difficulty": "15 min - 1 hour"
+    },
+    {
+      "instance_id": "sympy__sympy-20916",
+      "repo": "sympy/sympy",
+      "base_commit": "82298df6a51491bfaad0c6d1980e7e3ca808ae93",
+      "version": "1.8",
+      "difficulty": "<15 min fix"
+    }
+  ]
+}
