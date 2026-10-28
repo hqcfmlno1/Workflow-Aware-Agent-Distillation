@@ -33,7 +33,7 @@ def validate_cursor(batches, progress):
         raise ValueError("Checkpoint cursor differs from the deterministic epoch schedule")
 
 
-def trajectory_loss(state, record, config, device):
+def trajectory_loss(state, record, config, device, *, return_metrics=False):
     import torch
 
     coefficients = None
@@ -47,11 +47,27 @@ def trajectory_loss(state, record, config, device):
     labels = ids.masked_fill(groups == 0, -100)
     context = (
         torch.autocast("cuda", dtype=getattr(torch, config.base_dtype))
-        if device.type == "cuda" else nullcontext()
+        if device.type == "cuda"
+        else nullcontext()
     )
     with context:
         with activation_context(config.activation_storage, config.gpu_budget_bytes):
             hidden = state.decoder(input_ids=ids, use_cache=False).last_hidden_state
+        if config.loss_normalization == "offline_span_anchor":
+            from workflow_distillation.lora_fp16.span_loss import chunked_span_loss
+
+            loss, metrics = chunked_span_loss(
+                hidden,
+                state.head,
+                labels,
+                groups,
+                record["weights"],
+                record["ref_logp"],
+                record["anchor_weights"],
+                beta=config.anchor_beta,
+                chunk_size=config.loss_chunk_size,
+            )
+            return (loss, metrics) if return_metrics else loss
         return chunked_hidden_loss(
             hidden,
             state.head,
@@ -75,6 +91,7 @@ def train_update(state, records, config, device, emit=lambda event: None):
         torch.cuda.synchronize(device)
         torch.cuda.reset_peak_memory_stats(device)
     tick, total = time.monotonic(), 0.0
+    span_metrics = []
     for index, record in enumerate(records):
         emit(
             {
@@ -84,7 +101,11 @@ def train_update(state, records, config, device, emit=lambda event: None):
                 "tokens": len(record["input_ids"]),
             }
         )
-        loss = trajectory_loss(state, record, config, device)
+        if config.loss_normalization == "offline_span_anchor":
+            loss, detail = trajectory_loss(state, record, config, device, return_metrics=True)
+            span_metrics.append(detail)
+        else:
+            loss = trajectory_loss(state, record, config, device)
         if not bool(torch.isfinite(loss)):
             raise FloatingPointError("Nonfinite loss")
         total += float(loss.detach())
@@ -119,6 +140,29 @@ def train_update(state, records, config, device, emit=lambda event: None):
         seconds_per_trajectory=seconds / len(records),
         scale=state.scaler.get_scale(),
     )
+    if span_metrics:
+        for key in ("weighted_ce", "plain_ce", "anchor_loss", "anchor_scaled", "total_loss"):
+            result[key] = sum(m[key] for m in span_metrics) / len(span_metrics)
+        counts = np.sum([m["group_counts"] for m in span_metrics], axis=0)
+        sums = np.sum([m["group_ce_sums"] for m in span_metrics], axis=0)
+        masses = np.sum([m["group_weight_sums"] for m in span_metrics], axis=0)
+        names = ("masked", "reasoning", "content", "action", "submit")
+        result["group_counts"] = dict(zip(names, counts.tolist(), strict=True))
+        result["group_nll"] = {
+            names[g]: float(sums[g] / counts[g]) if counts[g] else None for g in range(1, 5)
+        }
+        result["group_weight_sums"] = dict(zip(names, masses.tolist(), strict=True))
+        result["reasoning_weight_mass_fraction"] = float(masses[1] / masses.sum())
+        result["anchor_weight_sum"] = sum(m["anchor_weight_sum"] for m in span_metrics)
+        reasoning_weights = []
+        for record in records:
+            target_g = np.asarray(record["groups"])[1:]
+            reasoning_weights.extend(np.asarray(record["weights"])[target_g[target_g > 0] == 1])
+        result["reasoning_weight_quantiles"] = (
+            np.quantile(reasoning_weights, [0, 0.25, 0.5, 0.75, 1]).tolist()
+            if reasoning_weights
+            else []
+        )
     if device.type == "cuda":
         free, capacity = torch.cuda.mem_get_info(device)
         result.update(

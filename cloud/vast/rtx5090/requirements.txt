@@ -9,3 +9,5 @@ huggingface-hub==1.33.0
 psutil==7.2.2
 flash-linear-attention==0.6.0
 fla-core==0.6.0
+triton==3.6.0
+tokenizers==0.23.3

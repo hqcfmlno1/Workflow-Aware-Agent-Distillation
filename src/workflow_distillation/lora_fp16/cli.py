@@ -65,20 +65,38 @@ def package_version(name):
         return None
 
 
-def prepare(config, index, selection_path=None):
+def prepare(config, index, selection_path=None, span_sidecar=None):
     selection = json.loads((selection_path or PROFILE / "selection.json").read_text())
     if sha256_file(index) != selection["index_sha256"]:
         raise ValueError("Dataset differs from the frozen experiment selection")
     if selection_path is not None:
         from workflow_distillation.lora_fp16.metacurate import load_corpus
 
-        if config.loss_normalization != "vanilla":
+        if config.loss_normalization not in ("vanilla", "offline_span_anchor"):
             raise ValueError("The complete MetaCurate profile requires vanilla SFT")
         dataset, split = load_corpus(index, selection)
     else:
         dataset, split = load_bundle(index)
         if split != selection["split"]:
             raise ValueError("Holdout selection differs")
+    sidecar_hash = None
+    if config.loss_normalization == "offline_span_anchor":
+        if span_sidecar is None:
+            raise ValueError("The span objective requires a complete --span-sidecar")
+        from workflow_distillation.lora_fp16.span_cache import SpanDataset, load_sidecar
+        from workflow_distillation.lora_fp16.span_cached_scoring import reference_identity
+
+        sidecar_path = Path(span_sidecar)
+        sidecar_manifest = json.loads((sidecar_path / "index.json").read_text())
+        expected_ref = reference_identity(
+            config, sidecar_manifest["reference"]["provenance_sha256"]
+        )
+        if sidecar_manifest["reference"] != expected_ref:
+            raise ValueError("Cached reference/scoring configuration or software differs")
+        dataset = SpanDataset(dataset, load_sidecar(sidecar_path, sha256_file(index), expected_ref))
+        sidecar_hash = sha256_file(sidecar_path / "index.json")
+    elif span_sidecar is not None:
+        raise ValueError("--span-sidecar requires offline_span_anchor normalization")
     by_id = {r["trajectory_id"]: i for i, r in enumerate(dataset.records)}
     train = [by_id[t] for t in split["train_ids"]]
     validation = [by_id[t] for t in split["validation_ids"]]
@@ -119,6 +137,8 @@ def prepare(config, index, selection_path=None):
             "sources": {str(p.relative_to(source)): sha256_file(p) for p in paths},
         },
     }
+    if sidecar_hash is not None:
+        identity["settings"]["span_sidecar_sha256"] = sidecar_hash
     return dataset, train, validation, batches, identity
 
 
@@ -175,6 +195,9 @@ def pilot(state, dataset, train, config, device, identity, hardware, emit, desti
         ("representative", typical[i : i + config.accumulation])
         for i in range(0, len(typical), config.accumulation)
     ]
+    if config.loss_normalization == "offline_span_anchor":
+        # User requested one longest-trajectory check, then enter training.
+        trials = [("longest", longest[:1])]
     results = []
     for label, indices in trials:
         result = train_update(state, [dataset.record(i) for i in indices], config, device, emit)
@@ -184,6 +207,8 @@ def pilot(state, dataset, train, config, device, identity, hardware, emit, desti
         results.append(result)
         emit({"event": "pilot_update", **result})
     representative = [r for r in results if r["kind"] == "representative"]
+    if not representative:
+        representative = results
     throughput = sum(r["tokens"] for r in representative) / sum(
         r["seconds"] for r in representative
     )
@@ -235,6 +260,9 @@ def main(argv=None):
         "--output", type=Path, default=ROOT / "outputs/training/rtx5090_32gb/tqs060-fp16"
     )
     parser.add_argument("--pilot-report", type=Path)
+    parser.add_argument(
+        "--span-sidecar", type=Path, help="Complete offline scoring cache directory"
+    )
     parser.add_argument("--resume", help="latest (local), hub, or a trusted checkpoint directory")
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--max-seconds", type=int, default=28800)
@@ -251,7 +279,11 @@ def main(argv=None):
     config = RunConfig(**json.loads(args.config.read_text()))
     if args.epochs is not None:
         config = replace(config, epochs=args.epochs)
-    dataset, train, validation, batches, identity = prepare(config, args.index, args.selection)
+    dataset, train, validation, batches, identity = prepare(
+        config, args.index, args.selection, args.span_sidecar
+    )
+    if config.loss_normalization == "offline_span_anchor" and args.prune_hub_history:
+        parser.error("Span runs upload only pinned epochs; do not use --prune-hub-history")
     steps_per_epoch = math.ceil(len(train) / config.accumulation)
     pinned = list(range(steps_per_epoch, len(batches) + 1, steps_per_epoch))
     args.output.mkdir(parents=True, exist_ok=True)
@@ -278,9 +310,21 @@ def main(argv=None):
             counts = np.bincount(np.asarray(groups[1:], dtype=np.int64), minlength=5)
             shares.append(np.asarray(coefficients) * counts / denominator)
         report["mean_loss_coefficient_share"] = dict(
-            zip(("masked", "reasoning", "content", "action", "submit"),
-                np.mean(shares, axis=0).tolist(), strict=True)
+            zip(
+                ("masked", "reasoning", "content", "action", "submit"),
+                np.mean(shares, axis=0).tolist(),
+                strict=True,
+            )
         )
+    if config.loss_normalization == "offline_span_anchor":
+        (args.output / "run-config.json").write_text(json.dumps(config.to_dict(), indent=2) + "\n")
+        (args.output / "span-sidecar.json").write_text(
+            (args.span_sidecar / "index.json").read_text()
+        )
+        if (args.span_sidecar / "summary.json").exists():
+            (args.output / "scoring-summary.json").write_text(
+                (args.span_sidecar / "summary.json").read_text()
+            )
     if args.mode == "preflight":
         (args.output / "preflight.json").write_text(json.dumps(report, indent=2) + "\n")
         print(json.dumps({k: v for k, v in report.items() if k != "identity"}, indent=2))
@@ -341,6 +385,10 @@ def execute(args, config, dataset, train, validation, batches, identity, pinned,
                 keep_last=config.keep_recovery if args.prune_hub_history else None,
                 pinned_steps=pinned,
             )
+            if config.loss_normalization == "offline_span_anchor":
+                from workflow_distillation.lora_fp16.span_run import EpochPublisher
+
+                publisher = EpochPublisher(publisher, pinned, args.output)
             info = publisher.validate()
             from huggingface_hub import HfApi
 
@@ -348,6 +396,8 @@ def execute(args, config, dataset, train, validation, batches, identity, pinned,
             if f"{args.hub_prefix}/latest.json" in files and not args.resume:
                 raise ValueError("Hub already contains this run: use --resume hub or a fresh repo")
         state = build_model(config)
+        if config.loss_normalization == "offline_span_anchor" and publisher is not None:
+            publisher.model = state.model
         emit(
             {
                 "event": "model_loaded",
@@ -361,7 +411,12 @@ def execute(args, config, dataset, train, validation, batches, identity, pinned,
             pilot(state, dataset, train, config, device, identity, hardware, emit, pilot_path)
             return
         scheduler = make_scheduler(state.optimizer, config, len(batches))
-        manager = CheckpointManager(
+        manager_class = CheckpointManager
+        if config.loss_normalization == "offline_span_anchor":
+            from workflow_distillation.lora_fp16.span_run import SpanCheckpointManager
+
+            manager_class = SpanCheckpointManager
+        manager = manager_class(
             args.output / "checkpoints",
             identity,
             save_every=config.save_every,
@@ -386,6 +441,15 @@ def execute(args, config, dataset, train, validation, batches, identity, pinned,
                 scaler=state.scaler,
             )
             validate_cursor(batches, progress)
+            if config.loss_normalization == "offline_span_anchor":
+                from workflow_distillation.lora_fp16.span_run import (
+                    recover_events,
+                    restore_checkpoint_logs,
+                )
+
+                if args.resume == "hub":
+                    restore_checkpoint_logs(manager.last_checkpoint, args.output)
+                recover_events(args.output / "events.jsonl", progress["global_step"])
             manager.republish(model=state.model)
             emit({"event": "resumed", **progress})
 
@@ -407,8 +471,13 @@ def execute(args, config, dataset, train, validation, batches, identity, pinned,
 
         def validate(epoch):
             if not validation:
-                emit({"event": "epoch_boundary", "epoch": epoch,
-                      "validation": "disabled; all selected trajectories used for training"})
+                emit(
+                    {
+                        "event": "epoch_boundary",
+                        "epoch": epoch,
+                        "validation": "disabled; all selected trajectories used for training",
+                    }
+                )
                 # Atomic checkpoints already contain adapter and optimizer state.
                 # Also provide standard PEFT exports ready for inference.
                 if epoch > 0:

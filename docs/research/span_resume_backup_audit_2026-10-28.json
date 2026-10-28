@@ -1,0 +1,19 @@
+{
+  "complete_records": 1060,
+  "remaining_records": 120,
+  "verified_turns": 27931,
+  "supervised_tokens": 6933421,
+  "saved_partial_variants": 3,
+  "partial_turns": [
+    {
+      "record": 1060,
+      "message_index": 20,
+      "saved_variants": 3
+    }
+  ],
+  "sidecar_weight_error": 0.0,
+  "archive_sha256": "220748dc70ff69f1b057c6eab5fda54626f7d028ab29088355f03bf138067470",
+  "code_identity_matches": true,
+  "corpus_identity_matches": true,
+  "final_index_absent_as_expected": true
+}
