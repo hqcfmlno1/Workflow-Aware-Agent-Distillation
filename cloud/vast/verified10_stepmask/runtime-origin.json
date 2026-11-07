@@ -1,0 +1,25 @@
+{
+  "source": "verified10-span-anchor-resume200-1200s/server/runtime",
+  "files_sha256": {
+    "benchmarks/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "benchmarks/swe_bench_verified/__init__.py": "3236b35b1fa289bb0fa7c980a2039ad4642e74d11cf6f952fcbd78fd734aa767",
+    "benchmarks/swe_bench_verified/adapter_variants.py": "560a5fa4853c8c6a4717ea725bb13214e3d80596e5aea81eda3ecd94e4574814",
+    "benchmarks/swe_bench_verified/campaign.py": "54ec22e8756e7ed05371a55636d3ef35ae4b517fe88cc8885e99222785f0a282",
+    "benchmarks/swe_bench_verified/client.py": "864fbfa45233126c3ddcb1aca46ef7e4eed2440bee3ff380865217e68170c869",
+    "benchmarks/swe_bench_verified/config.py": "753b283d8013762bad61c6aeb27ec724568c274325311faf80fdb2e9905c00d3",
+    "benchmarks/swe_bench_verified/decoding.py": "aa972834a19b4c97db87f4ae68d50de8f261726c76290e781e4a5572c3d7383e",
+    "benchmarks/swe_bench_verified/docker_resources.py": "c5b045d6debe7293725e4c0bc0e320d690e6d7aec9388371478fc98c90ace417",
+    "benchmarks/swe_bench_verified/export_adapter.py": "445777b9406a0c4a21dcab162a8ce6ac235f625ad833a918f092da17c7fac4d0",
+    "benchmarks/swe_bench_verified/generation.py": "8b0c4c0c749951156ee3389d384b67add815fb4a9badd425befd903263bbfbac",
+    "benchmarks/swe_bench_verified/guardrails.py": "da9a19ffe6dbb9cf4d0671e1e1338a6b53fa9dc56c6bfde1a1edcc8c6cce340d",
+    "benchmarks/swe_bench_verified/policy.py": "dd3ce6f8af8c017176b23ffd4ba5b690cfe2d6047b37408fbdb1e1015543d792",
+    "benchmarks/swe_bench_verified/protocol.py": "00ff25ef085985fb30cde0c02dbb438f2d580e8552707b3e0745b748bc296811",
+    "benchmarks/swe_bench_verified/runner.py": "55441bcc6e6e627bd61aafa48c644d47cc20e89d6f6bb16b10a24d53358eed71",
+    "benchmarks/swe_bench_verified/serving.py": "2b9e35fbb240b625ca52b1d0f2547059dcbe8fecd785454626ed57149918dac3",
+    "benchmarks/swe_bench_verified/step_resume.py": "462fb66fd0fac6fc26037e249a990bc344a2611f5303173b2490a66d25f49961",
+    "benchmarks/swe_bench_verified/vllm_backend.py": "865207251c0414e337d4a5602dd2228348398c575d691157328d82e105f69bc5",
+    "workflow_distillation/__init__.py": "58bef42e0be9cf9beba832eb107c68d1210ebdca0b50e40c2c08e1d1eec93183",
+    "workflow_distillation/training/__init__.py": "049b57dcdb7a5ff4912f3a3d3fc207093b6713d1de59650f8c2cce34711889ef",
+    "workflow_distillation/training/config.py": "83fb8b8c87bd40913068d53acc9c5feb8b6e6e3087a72ab67f47523f73563c18"
+  }
+}

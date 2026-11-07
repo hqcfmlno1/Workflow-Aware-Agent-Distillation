@@ -1,0 +1,74 @@
+{
+  "name": "verified10-bf16-triplet",
+  "dataset_revision": "c104f840cc67f8b6eec6f759ebc8b2693d585d4a",
+  "selection_rule": "Choose ten repos by SHA256(verified10:42:repo); in each choose lowest SHA256(verified10:42:instance_id), excluding training IDs.",
+  "seed": 42,
+  "instance_ids": [
+    "astropy__astropy-7336",
+    "django__django-15695",
+    "matplotlib__matplotlib-25960",
+    "mwaskom__seaborn-3187",
+    "pallets__flask-5014",
+    "psf__requests-1766",
+    "pylint-dev__pylint-4970",
+    "pytest-dev__pytest-6202",
+    "sphinx-doc__sphinx-8548",
+    "sympy__sympy-20590"
+  ],
+  "rows_sha256": "d92eb06a256925cbddd4204b157d10694944fe1f25262ac899f528126c685a9d",
+  "training_index_sha256": "25ba49de9761df40cc9ed0ecb8568a8e02a71f9c59fc1029303e968d604eeebc",
+  "training_unique_tasks": 477,
+  "training_overlap": [],
+  "selection_uses": [
+    "repo",
+    "instance_id",
+    "training_task_ids"
+  ],
+  "base_model": "Qwen/Qwen3.5-4B",
+  "base_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+  "config": {
+    "model_name": "qwen35-4b-bf16-triplet",
+    "base_dtype": "bfloat16",
+    "max_context_tokens": null,
+    "max_new_tokens": null,
+    "prefill_chunk_tokens": 2048,
+    "prefill_mode": "chunked",
+    "prefill_validation": "strict",
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "top_k": 20,
+    "seed": 42,
+    "reasoning_loop_guard": false,
+    "split_at_layer": null,
+    "enable_thinking": true,
+    "agent_step_limit": 0,
+    "request_timeout_seconds": 600
+  },
+  "sources": {
+    "vanilla": {
+      "repo": "hqcfmlno1/QwenStacy-4b-bf16-metacurate1180-vanilla-run1",
+      "repo_type": "model",
+      "prefix": "bf16-metacurate1180-vanilla",
+      "revision": "c090a4592a5f1c6d7b75462f6ca6bfe50f8b4c76"
+    },
+    "span-anchor": {
+      "repo": "hqcfmlno1/QwenStacy-4b-bf16-metacurate1180-span-anchor-run1",
+      "repo_type": "model",
+      "prefix": "bf16-metacurate1180-span-anchor",
+      "revision": "ea744f1a2ceab8fdebd1093d292794266ea30483"
+    }
+  },
+  "checkpoint": "checkpoint-00000590",
+  "variant_order": [
+    "base",
+    "vanilla",
+    "span-anchor"
+  ],
+  "tool_call_limit": 100,
+  "turn_timeout_seconds": 600,
+  "task_budget_seconds": 900,
+  "campaign_budget_seconds": 9000,
+  "execution_order": "Rotate variant_order by task_index modulo three.",
+  "patch_policy": "Official grading of explicitly submitted patch only.",
+  "diagnostic_only": true
+}

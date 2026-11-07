@@ -91,3 +91,17 @@ OmniCode task keys phục vụ chống trùng vẫn được giữ.
 Xem thêm [scripts](scripts/README.md), [output](outputs/README.md),
 [thiết kế loss](docs/action_focused_sft_loss_design.md) và
 [pipeline chuẩn bị ban đầu](docs/action_focused_sft_phase1.md).
+
+## Span-anchor với mask các step xấu
+
+Nhánh `sft/span-anchor-step-mask` dùng LLM đánh giá các assistant step trong
+1.180 trajectory DeepSeek thành công. Step được đánh dấu vẫn nằm trong context,
+nhưng không nhận supervision từ cả loss CE lẫn anchor. Các trọng số span đã chấm
+được ánh xạ theo vị trí target còn lại, không chấm điểm lại.
+
+- [Policy và runner đánh giá step](docs/research/deepseek1180_llm_step_masking_2026-11-07.md).
+- [Chuẩn bị dữ liệu, cache và train hai epoch](docs/research/span_anchor_stepmask_training_2026-11-07.md).
+- [Đánh giá checkpoint mới trên đúng 10 task Verified](cloud/vast/verified10_stepmask/README.md).
+
+Annotation, corpus, score binaries, checkpoint và log nằm ngoài Git. Code không
+tự gọi teacher hay thuê GPU khi clone; các thao tác tốn phí phải được chạy tường minh.

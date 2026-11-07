@@ -261,6 +261,10 @@ def main(argv=None):
     )
     parser.add_argument("--pilot-report", type=Path)
     parser.add_argument(
+        "--skip-pilot", action="store_true",
+        help="Explicitly skip the disposable memory pilot; retain data/runtime/GPU checks",
+    )
+    parser.add_argument(
         "--span-sidecar", type=Path, help="Complete offline scoring cache directory"
     )
     parser.add_argument("--resume", help="latest (local), hub, or a trusted checkpoint directory")
@@ -357,7 +361,8 @@ def execute(args, config, dataset, train, validation, batches, identity, pinned,
     hardware = gpu_audit(config)
     (args.output / "hardware.json").write_text(json.dumps(hardware, indent=2) + "\n")
     if args.mode == "train":
-        validate_pilot(json.loads(pilot_path.read_text()), identity, hardware)
+        if not getattr(args, "skip_pilot", False):
+            validate_pilot(json.loads(pilot_path.read_text()), identity, hardware)
         if (args.output / "checkpoints/latest.json").exists() and not args.resume:
             raise ValueError("Existing checkpoints: pass --resume latest or choose a new output")
         if not args.resume and (args.output / "events.jsonl").exists():
@@ -370,7 +375,10 @@ def execute(args, config, dataset, train, validation, batches, identity, pinned,
     random.seed(config.seed)
     np.random.seed(config.seed)
     torch.manual_seed(config.seed)
-    emit({**report, "event": "initializing", "hardware": hardware})
+    emit({
+        **report, "event": "initializing", "hardware": hardware,
+        "pilot_skipped": args.mode == "train" and getattr(args, "skip_pilot", False),
+    })
     manager = None
     started = time.monotonic()
     budget = StopBudget(
