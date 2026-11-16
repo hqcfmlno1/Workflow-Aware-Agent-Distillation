@@ -11,6 +11,7 @@ __pycache__/
 dist/
 
 # Generated experiment artifacts
+/draft/
 /data/*
 !/data/README.md
 /outputs/*
