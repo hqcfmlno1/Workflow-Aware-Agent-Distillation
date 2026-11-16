@@ -191,7 +191,11 @@ def main(argv=None):
                 emit=emit,
             )
             export = args.output / "adapters"
-            if not (export / "complete.json").exists():
+            if (export / "complete.json").exists():
+                existing = verify_export(export)
+                if existing["identity"] != identity:
+                    raise ValueError("Adapter export identity differs from this training run")
+            else:
                 runtime.model.save_pretrained(export, safe_serialization=True)
                 from .artifacts import finish_export
 
