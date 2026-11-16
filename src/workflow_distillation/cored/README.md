@@ -11,7 +11,9 @@ Input is an immutable token/group corpus, its exact character-offset provenance,
 and a complete WebKD scoring directory **including original `parts/*.turn-*.json`**.
 The converter checks corpus/provenance/sidecar hashes, target order, original span
 weights and token coverage. It does not apply a chat template again. Truncated
-and step-masked corpora are rejected. System/user/observations remain context;
+and step-masked corpora are rejected. Existing omissions made by the original
+chat template are recorded in trajectory metadata; conversion adds no omissions.
+System/user/observations remain context;
 all originally supervised assistant action, content, final and ending tokens
 remain targets. A token crossing two character spans has fractional membership,
 whose total supervised mass is exactly one. Unassigned assistant protocol tokens

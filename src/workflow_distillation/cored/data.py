@@ -125,6 +125,12 @@ def from_provenance(sample, provenance, turn_scores):
     if len(offsets) != len(ids):
         raise ValueError("Offsets/corpus length differs")
     segments, assigned = [], np.zeros(len(ids), dtype=float)
+    token_offsets = np.asarray(offsets, dtype=np.int64)
+    widths = token_offsets[:, 1] - token_offsets[:, 0]
+    reasoning_rows = np.flatnonzero((np.asarray(groups) == 1) & (widths > 0))
+    reasoning_rows = reasoning_rows[reasoning_rows > 0]
+    token_left = token_offsets[reasoning_rows, 0]
+    token_right = token_offsets[reasoning_rows, 1]
     for turn in provenance["turns"]:
         spans = turn["spans"]
         scores = turn_scores.get(str(turn["message_index"]))
@@ -135,13 +141,11 @@ def from_provenance(sample, provenance, turn_scores):
         else:
             weights = [1.0] * len(spans)
         for si, ((left, right), weight) in enumerate(zip(spans, weights, strict=True)):
-            positions, fractions = [], []
-            for pos, (a, b) in enumerate(offsets):
-                overlap = max(0, min(b, right) - max(a, left))
-                if pos > 0 and groups[pos] == 1 and b > a and overlap:
-                    positions.append(pos)
-                    fractions.append(overlap / (b - a))
-                    assigned[pos] += fractions[-1]
+            overlap = np.maximum(0, np.minimum(token_right, right) - np.maximum(token_left, left))
+            active = overlap > 0
+            positions = reasoning_rows[active].tolist()
+            fractions = (overlap[active] / widths[reasoning_rows[active]]).tolist()
+            assigned[positions] += fractions
             if positions:
                 key = f"m{turn['message_index']}:s{si}"
                 segments.append(Segment(key, "reasoning", positions, fractions, float(weight)))
@@ -192,11 +196,8 @@ def prepare_existing(corpus_index, provenance_index, webkd_path):
         or any(row.get("masked_target_tokens", 0) for row in source_manifest["data"])
     ):
         raise ValueError("Luna/step-masked corpus is not allowed in this recipe")
-    if any(
-        r["length"] != r["full_token_count"] or r.get("omitted_reasoning_messages")
-        for r in source_manifest["data"]
-    ):
-        raise ValueError("Expected a full trajectory with all original reasoning")
+    if any(r["length"] != r["full_token_count"] for r in source_manifest["data"]):
+        raise ValueError("Expected a full trajectory without additional truncation")
     manifest = json.loads(provenance_index.read_text())
     corpus_hash = sha256_file(Path(corpus_index))
     if manifest["corpus_sha256"] != corpus_hash:
@@ -223,7 +224,13 @@ def prepare_existing(corpus_index, provenance_index, webkd_path):
             path = webkd_path / "parts" / f"{i:06d}.turn-{mi}.json"
             if path.is_file():
                 scores[str(mi)] = json.loads(path.read_text())
-        yield from_provenance(dataset.record(i), provenance, scores)
+        record = from_provenance(dataset.record(i), provenance, scores)
+        # Existing official-template omissions are part of the immutable source.
+        # Preserve them explicitly; never remove additional reasoning here.
+        record.metadata["original_template_omissions"] = source_manifest["data"][i].get(
+            "omitted_reasoning_messages", []
+        )
+        yield record
 
 
 def write_dataset(root, records, identity, tokenizer_files=None):
