@@ -80,10 +80,14 @@ def _nll_kl(hidden, head, record, coefficients, reference, kl_coefficient, chunk
     return total, dict(nll=float(sums[0].detach()), kl=float(sums[1].detach()))
 
 
-def functional_repulsion(own, peers, head, *, gamma=1.0, chunk_size=16):
-    """One directed expert's contribution; distance is a SUM, not a token mean."""
+def functional_repulsion(
+    own, peers, head, *, gamma=1.0, chunk_size=16, normalization="mean"
+):
+    """Directed repulsion; default distance averages selected tokens and vocabulary."""
     if gamma <= 0 or chunk_size < 1:
         raise ValueError("Positive gamma/chunk required")
+    if normalization not in ("mean", "sum"):
+        raise ValueError("Repulsion normalization must be mean or sum")
     if not peers or own.shape[0] == 0:
         return own.sum() * 0
     if any(p.shape != own.shape for p in peers):
@@ -104,6 +108,8 @@ def functional_repulsion(own, peers, head, *, gamma=1.0, chunk_size=16):
             return torch.stack(terms)
 
         distances = distances + checkpoint(distance, h, *other, use_reentrant=False)
+    if normalization == "mean":
+        distances = distances / (own.shape[0] * head.weight.shape[0])
     return (-gamma * distances).exp().sum() / len(peers)
 
 
@@ -117,6 +123,7 @@ def phase1_loss(hidden, head, record, keep, peers, config):
         head,
         gamma=config.repulsion_gamma,
         chunk_size=config.projection_chunk,
+        normalization=config.repulsion_normalization,
     )
     metrics["repulsion"] = float(rep.detach())
     return loss + config.repulsion_coefficient * rep, metrics

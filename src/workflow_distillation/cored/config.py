@@ -14,6 +14,7 @@ class CoRedConfig:
     ortho_coefficient: float = 0.01
     repulsion_coefficient: float = 1.0
     repulsion_gamma: float = 1.0
+    repulsion_normalization: str = "mean"
     uncertainty_coefficient: float = 0.5
     disagreement_coefficient: float = 0.5
     disagreement_epsilon: float = 1e-3
@@ -94,6 +95,8 @@ class CoRedConfig:
                 raise ValueError(f"Positive coefficient required: {name}")
         if self.uncertainty_coefficient + self.disagreement_coefficient > 1:
             raise ValueError("Council weight coefficients must sum to <=1")
+        if self.repulsion_normalization not in ("mean", "sum"):
+            raise ValueError("Repulsion normalization must be mean or sum")
         if self.dtype not in ("float32", "bfloat16"):
             raise ValueError("Use float32 (CPU) or unquantized bfloat16; FP16 is unsupported")
         if self.gdn_backend not in ("reference", "fla") or not self.target_modules:

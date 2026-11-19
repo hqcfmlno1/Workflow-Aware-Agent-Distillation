@@ -49,7 +49,8 @@ trajectories. Expert losses are **summed**, not averaged across experts.
 L1 = sum_m(mean_trajectory(weighted_token_mean(NLL_m)))
      + lambda_rep * mean_trajectory(Lrep)
      + lambda_ortho * Lortho
-D[m,n] = sum_selected_tokens(sum_vocab((log p_m - stopgrad(log p_n))^2))
+D_raw[m,n] = sum_selected_tokens(sum_vocab((log p_m - stopgrad(log p_n))^2))
+D[m,n] = D_raw[m,n] / (number_of_selected_tokens * vocabulary_size)
 Lrep = sum_m(sum_n!=m(exp(-gamma*D[m,n]))) / (M-1)
 ```
 
@@ -61,8 +62,13 @@ ortho(m,n) = ||A_m*A_n^T||_F^2 / (||A_m||_F^2 * ||A_n||_F^2)
 ```
 
 Each squared norm is clamped below at `1e-8`. Defaults: `lambda_rep=1`,
-`lambda_ortho=0.01`, `gamma=1`. Repulsion uses full vocabulary and a **sum** over
-tokens; it can saturate for large distances. This is not target-token k3 anchoring.
+`lambda_ortho=0.01`, `gamma=1`. Default `repulsion_normalization="mean"`
+averages squared log-probability differences over selected token positions and
+the full vocabulary, after summing all projection chunks. This normalization is
+our adaptation to reduce saturation caused by token/vocabulary counts; it does
+not guarantee a nonzero gradient for every possible distance. Legacy
+`repulsion_normalization="sum"` uses `D_raw` directly. Empty selections contribute
+a differentiable zero. This is not target-token k3 anchoring.
 Detached peer predictions are captured before any expert update. Each expert's
 forward/backward finishes before switching adapters, including gradient-checkpoint
 recomputation. All experts share one optimizer step; orthogonality is added once
