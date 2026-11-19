@@ -2,9 +2,9 @@
 
 Tài liệu này giữ bằng chứng cấu hình và incident của giai đoạn T4 bên dưới.
 Để review pipeline local sau refactor, đọc [training.md](training.md).
-Cấu hình phần cứng nằm trong [GPU profiles](../configs/training/gpus/README.md);
-benchmark 4080 và bản implementation trước refactor nằm trong
-[README 4080](../configs/training/gpus/rtx4080_32gb/README.md).
+Cấu hình phần cứng nằm trong [GPU profiles](../configs/training/gpus/README.md).
+Tài liệu về run 4080 cũ nằm trong revision được ghi ở
+[hướng dẫn tương thích](../legacy/README.md).
 Luồng refactor chưa deploy lên server và cần pilot CUDA trước khi sử dụng.
 
 Cập nhật ngày 2026-10-18 theo yêu cầu train một epoch, tăng khả năng thích nghi

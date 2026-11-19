@@ -4,12 +4,16 @@ The canonical local training entrypoint is [`scripts/train.py`](../scripts/train
 See the [review map](../docs/training.md) before reading historical launchers.
 
 [`first_run/source-hashes.json`](first_run/source-hashes.json) inventories the
-source files used by existing training identities. Their original paths and
-bytes remain intact because checkpoint manifests hash them. Physically moving
-or replacing those files would invalidate old resume checks.
+source files used by historical training identities. Migration verifies shared
+source files against the recorded hashes and uses the retired launcher hashes
+to identify older checkpoints.
 
 This directory holds the compatibility inventory, not a second implementation.
 Some inventoried files are also shared mathematical/data/checkpoint primitives
-called directly by the canonical engine. Historical launchers/recovery adapters
-remain at their original paths for reproducing older sessions. New training
-orchestration belongs in `src/workflow_distillation/training/`.
+called directly by the canonical engine. Training orchestration lives in
+`src/workflow_distillation/training/`.
+
+The 2x RTX 4080 profile, launcher, runtime and pilot notes are available in
+[commit `e31b4bd`](https://github.com/hqcfmlno1/Workflow-Aware-Agent-Distillation/tree/e31b4bd086b4ca79a660216ce08fc6684b7df22a/configs/training/gpus/rtx4080_32gb).
+To resume a pinned 4080 run, use the original checkout or the revision matching
+its checkpoint manifest.

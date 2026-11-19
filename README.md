@@ -8,10 +8,8 @@ bình đều theo trajectory. Mục tiêu evaluation là **SWE-bench Verified**.
 
 ## Trạng thái hiện tại
 
-- Training đã chạy trên Kaggle và Vast. Bằng chứng pilot/resume 4080 được ghi
-  trong repo ở checkpoint **1028 / 2.692 trajectory**, với Efficient SDPA và
-  hybrid activation storage 4 GiB/GPU. Đây là mốc đã xác minh trong tài liệu,
-  không phải tiến độ realtime; xem [profile 4080](configs/training/gpus/rtx4080_32gb/README.md).
+- Training đã chạy trên Kaggle và Vast. Thông tin về các run trước đây nằm trong
+  [tài liệu tương thích](legacy/README.md).
 - Đã chuẩn bị cohort ưu tiên đa dạng đến batch **2.000 / 4.000 trajectory**:
   **3.866 task**, **1.501 repo**. Giữ nguyên prefix đã học; thêm 2.610 trajectory
   từ các task mới, mỗi trajectory bổ sung dưới 28.000 token.

@@ -41,9 +41,8 @@ Xem [first run](../docs/first_run_epoch.md) và
 [checkpoint/resume](../docs/training_checkpoint_resume.md).
 
 `training/fetch_training_checkpoint.py` tải checkpoint mới nhất từ HF.
-`training/train_qlora_vast*.py` và `training/gpus/rtx4080_32gb/train.py` là các
-đường chạy đã dùng cho Vast trước refactor. Giữ nguyên chúng để bảo toàn hash
-và resume; không thêm orchestration mới vào chain launcher này.
-Xem [inventory tương thích](../legacy/README.md).
+`training/train_qlora_vast*.py` chứa các launcher Vast cũ. Đường dẫn revision
+của launcher 4080 đã ngừng dùng nằm trong
+[inventory tương thích](../legacy/README.md).
 
 Collector OmniCode/OpenAI và các utility riêng của collector đã được gỡ.
