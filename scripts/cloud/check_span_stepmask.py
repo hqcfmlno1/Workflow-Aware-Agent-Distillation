@@ -7,10 +7,10 @@ import json
 from pathlib import Path
 
 from workflow_distillation.epoch_data import sha256_file
-from workflow_distillation.lora_fp16.config import RunConfig
-from workflow_distillation.lora_fp16.metacurate import load_corpus
-from workflow_distillation.lora_fp16.span_cache import SpanDataset, load_sidecar
-from workflow_distillation.lora_fp16.span_cached_scoring import reference_identity
+from workflow_distillation.lora_sft.config import RunConfig
+from workflow_distillation.lora_sft.metacurate import load_corpus
+from workflow_distillation.span_anchor.span_cache import SpanDataset, load_sidecar
+from workflow_distillation.span_anchor.span_cached_scoring import reference_identity
 
 ROOT = Path(__file__).resolve().parents[2]
 

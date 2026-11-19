@@ -14,10 +14,10 @@ import json
 import random
 from pathlib import Path
 
-from workflow_distillation.lora_fp16 import cli
-from workflow_distillation.lora_fp16.checkpoints import HuggingFacePublisher
-from workflow_distillation.lora_fp16.config import RunConfig
-from workflow_distillation.lora_fp16.engine import run_loop
+from workflow_distillation.lora_sft import cli
+from workflow_distillation.lora_sft.checkpoints import HuggingFacePublisher
+from workflow_distillation.lora_sft.config import RunConfig
+from workflow_distillation.lora_sft.engine import run_loop
 
 
 def publish_preserving_rng(publisher, path):

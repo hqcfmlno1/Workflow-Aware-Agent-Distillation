@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from workflow_distillation.epoch_data import EpochDataset, sha256_file
-from workflow_distillation.lora_fp16.data import select_split, write_bundle
+from workflow_distillation.lora_sft.data import select_split, write_bundle
 
 
 def main():

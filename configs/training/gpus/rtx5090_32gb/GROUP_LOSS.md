@@ -97,7 +97,7 @@ it does not read balance or destroy an instance.
 ## Review and verification
 
 1. `group_loss.json`: approved settings; other hyperparameters match `run.json`.
-2. `src/workflow_distillation/lora_fp16/loss.py`: counts, shared denominator.
+2. `src/workflow_distillation/lora_sft/loss.py`: counts, shared denominator.
 3. `engine.py`: chunked CE integration and actual accumulation mean; the historical
    `weighted_sft_loss.py` stays unchanged for old-run source checksums.
 4. `cli.py`: objective fingerprint, preflight shares and pilot admission.

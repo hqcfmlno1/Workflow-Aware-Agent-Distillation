@@ -64,14 +64,10 @@ không sao chép toàn bộ trainer cho mỗi GPU.
 | --- | ---: | ---: | ---: | --- |
 | `t4_16gb` | 2 | 1 | 2 | Pinned CPU; serial nếu policy RAM yêu cầu |
 | `rtx3090_24gb` | 2 | 2 | 4 | Pinned CPU |
-| `rtx4080_32gb` | 2 | 2 | 4 | Giữ tối đa 4 GiB/GPU; phần còn lại pinned CPU |
 
-Profile kiểm tra tên và VRAM thực tế. `rtx4080_32gb` dành riêng cho biến thể
-đã đo có 32 GiB; RTX 4080 thông thường 16 GiB không đạt admission.
-Attention giữ repeated-KV Efficient SDPA. Flash và full-GPU activation storage
-không được schema production mới chấp nhận. Kết quả pilot cũ ở
-[README 4080](../configs/training/gpus/rtx4080_32gb/README.md) chỉ là bằng chứng
-cho implementation trước refactor.
+Profile kiểm tra tên và VRAM thực tế. Cả hai profile dùng repeated-KV
+Efficient SDPA. Xem [hướng dẫn tương thích](../legacy/README.md) để truy cập
+cấu hình và tài liệu của run 4080 cũ.
 
 ## Những bất biến được giữ
 
@@ -116,7 +112,7 @@ PARENT_SHA=$(sha256sum "$PARENT/manifest.json" | cut -d ' ' -f 1)
   --source-plan cloud/kaggle/recovery/continuation-plan.json \
   --cohort data/processed/first_run_diverse_4000/diversity-plan.json \
   --pool-plan data/processed/first_run_diverse_remaining/pool-plan.json \
-  --gpu-profile configs/training/gpus/rtx4080_32gb/profile.json \
+  --gpu-profile configs/training/gpus/rtx3090_24gb/profile.json \
   --resume-from "$PARENT" \
   --migration-parent-manifest "$PARENT/manifest.json" \
   --migration-parent-manifest-sha256 "$PARENT_SHA" \
@@ -164,10 +160,9 @@ OOM. Nó không tự Stop/Destroy Vast instance hoặc quản lý billing.
 
 ## Tương thích và kiểm thử
 
-Xem [`legacy/`](../legacy/README.md) cho source bị checkpoint pin theo path/hash.
-Những file đó được giữ nguyên byte tại đường dẫn cũ; entrypoint mới không chạy
-bootstrap Kaggle hoặc chain import launcher legacy. `.krunignore` đã được gỡ;
-`.krun/` vẫn ignore artifact KRun cũ.
+Xem [`legacy/`](../legacy/README.md) để tra source đã được checkpoint ghim
+theo đường dẫn và hash. Khi resume chính xác một run cũ, dùng revision của run đó.
+Thư mục `.krun/` giữ các artifact KRun cũ ngoài Git.
 
 Test mới có profile/data/hash guards, loss và gradient batch đủ/thiếu,
 hai process Gloo chạy Step thật cả parallel/serial, restore optimizer/scaler/RNG,

@@ -8,12 +8,28 @@ from workflow_distillation.epoch_data import sha256_file
 from workflow_distillation.training.config import MODEL, REVISION, Experiment
 
 ROOT = Path(__file__).resolve().parents[3]
+RETIRED_4080_RUNTIME = "src/workflow_distillation/gpu_profiles/rtx4080_32gb/runtime.py"
+RETIRED_4080_SOURCES = {
+    "scripts/training/gpus/rtx4080_32gb/train.py",
+    "scripts/training/train_qlora_vast_4080.py",
+    "src/workflow_distillation/gpu_profiles/__init__.py",
+    "src/workflow_distillation/gpu_profiles/rtx4080_32gb/__init__.py",
+    RETIRED_4080_RUNTIME,
+    "src/workflow_distillation/vast_device_policy.py",
+}
 
 
 def source_hashes():
     expected = json.loads((ROOT / "legacy/first_run/source-hashes.json").read_text())
     for name, digest in expected.items():
-        if sha256_file(ROOT / name) != digest:
+        try:
+            actual = sha256_file(ROOT / name)
+        except FileNotFoundError:
+            # Retired files are only needed as identity records for migration.
+            if name in RETIRED_4080_SOURCES:
+                continue
+            raise
+        if actual != digest:
             raise ValueError(f"Historical source checksum differs: {name}")
     return expected
 
@@ -62,9 +78,5 @@ def validate_parent(parent, profile, plan, seed):
         if hashes.get(name) != digest:
             raise ValueError(f"Parent continuation checksum differs: {name}")
     execution = settings.get("gpu_execution")
-    if (
-        execution
-        and execution["runtime_sha256"]
-        != hashes["src/workflow_distillation/gpu_profiles/rtx4080_32gb/runtime.py"]
-    ):
+    if execution and execution["runtime_sha256"] != hashes[RETIRED_4080_RUNTIME]:
         raise ValueError("Parent execution adapter checksum differs")

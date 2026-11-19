@@ -15,7 +15,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 from workflow_distillation.epoch_data import sha256_file
-from workflow_distillation.lora_fp16.config import RunConfig
+from workflow_distillation.lora_sft.config import RunConfig
 from workflow_distillation.validation_loss import (
     aggregate,
     evaluate_record,
@@ -323,7 +323,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.steps and min(args.steps) < 0:
         parser.error("Steps must be nonnegative")
-    from workflow_distillation.lora_fp16.cli import prepare
+    from workflow_distillation.lora_sft.cli import prepare
 
     specs = json.loads(args.plan.read_text())["runs"]
     if (
@@ -359,7 +359,7 @@ def main(argv=None):
 
     import torch
 
-    from workflow_distillation.lora_fp16.model import build_model
+    from workflow_distillation.lora_sft.model import build_model
 
     if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
         raise ValueError("Expose one CUDA GPU with CUDA_VISIBLE_DEVICES=0")
@@ -374,12 +374,12 @@ def main(argv=None):
             for name in (
                 "validation_loss.py",
                 "validation_checkpoints.py",
-                "lora_fp16/model.py",
+                "lora_sft/model.py",
                 "optimized_qlora.py",
                 "training/model.py",
                 "training/config.py",
                 "epoch_data.py",
-                "lora_fp16/data.py",
+                "lora_sft/data.py",
             )
         },
         packages={

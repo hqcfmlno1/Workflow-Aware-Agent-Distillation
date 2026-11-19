@@ -173,7 +173,7 @@ when finished.
 ## Local verification and review order
 
 1. `selection.json`, `data.json`: frozen membership, task leakage, payload hashes.
-2. `src/workflow_distillation/lora_fp16/data.py`: selection and full-token checks.
+2. `src/workflow_distillation/lora_sft/data.py`: selection and full-token checks.
 3. `config.py`, `model.py`: dtype, trainable blocks, attention/GDN and optimizer.
 4. `engine.py`: per-trajectory loss, accumulation, validation and cursor.
 5. `cli.py`, `training_checkpoints.py`: pilot, scheduler and pinned retention.

@@ -12,7 +12,6 @@ def test_gpu_profiles_are_complete_and_keep_experiment_math_separate():
     for name, batch, mode in [
         ("t4_16gb", 1, "cpu"),
         ("rtx3090_24gb", 2, "cpu"),
-        ("rtx4080_32gb", 2, "hybrid"),
     ]:
         profile = load_profile(ROOT / f"configs/training/gpus/{name}/profile.json")
         experiment = Experiment()
@@ -22,10 +21,6 @@ def test_gpu_profiles_are_complete_and_keep_experiment_math_separate():
         assert config["rank"] == 32
         assert profile.activation_storage == mode
         assert profile.attention == "t4_repeated_kv"
-    assert (
-        load_profile(ROOT / "configs/training/gpus/rtx4080_32gb/profile.json").gpu_budget_bytes
-        == 4 * 2**30
-    )
 
 
 def test_profiles_fail_closed_on_unsupported_or_ambiguous_settings():

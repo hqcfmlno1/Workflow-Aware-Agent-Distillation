@@ -375,8 +375,8 @@ def test_pipeline_transitions_to_supervised_training_after_complete_scoring(tmp_
     )
     assert result.returncode == 0, result.stderr
     assert "scripts.training.score_span_lora" in calls[0]
-    assert calls[-1][:5] == ["-u", "-m", "workflow_distillation.lora_fp16", "--mode", "train"]
-    assert "workflow_distillation.lora_fp16.launch" not in str(calls)
+    assert calls[-1][:5] == ["-u", "-m", "workflow_distillation.span_anchor", "--mode", "train"]
+    assert "workflow_distillation.lora_sft.launch" not in str(calls)
     assert calls[-1][calls[-1].index("--span-sidecar") + 1] == str(tmp_path / "scores_cached")
 
 

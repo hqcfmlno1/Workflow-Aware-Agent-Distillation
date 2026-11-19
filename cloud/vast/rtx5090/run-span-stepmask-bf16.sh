@@ -44,7 +44,7 @@ else
     TASK_PUBLISH=(--hub-repo "$TASK_REPO" --hub-prefix bf16-metacurate1180-span-stepmask)
 fi
 if (( TASK_DRY )); then
-    exec "$TASK_VENV/bin/python" -m workflow_distillation.lora_fp16.launch \
+    exec "$TASK_VENV/bin/python" -m workflow_distillation.lora_sft.launch \
         --dry-run "${TASK_TRAIN[@]}" "${TASK_PUBLISH[@]}"
 fi
 if (( ! TASK_CHECK )); then
@@ -55,7 +55,7 @@ if (( ! TASK_CHECK )); then
         printf 'Existing run: use --resume latest/hub or a fresh output.\n' >&2; exit 1
     fi
 fi
-"$TASK_VENV/bin/python" -m workflow_distillation.lora_fp16 --mode preflight "${TASK_COMMON[@]}"
+"$TASK_VENV/bin/python" -m workflow_distillation.span_anchor --mode preflight "${TASK_COMMON[@]}"
 if (( TASK_CHECK )); then exit 0; fi
-exec "$TASK_VENV/bin/python" -m workflow_distillation.lora_fp16.launch \
+exec "$TASK_VENV/bin/python" -m workflow_distillation.lora_sft.launch \
     "${TASK_TRAIN[@]}" "${TASK_PUBLISH[@]}"

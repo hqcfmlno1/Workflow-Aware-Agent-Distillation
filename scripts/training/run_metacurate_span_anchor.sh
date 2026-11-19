@@ -78,20 +78,20 @@ if [[ "$TASK_STAGE" == train || "$TASK_STAGE" == all ]]; then
     fi
 fi
 TASK_TRAIN=("${TASK_COMMON[@]}" --span-sidecar "$TASK_SCORES" --output "$TASK_OUTPUT" --max-seconds "$TASK_SECONDS")
-"$TASK_PYTHON" -m workflow_distillation.lora_fp16 --mode preflight "${TASK_TRAIN[@]}"
+"$TASK_PYTHON" -m workflow_distillation.span_anchor --mode preflight "${TASK_TRAIN[@]}"
 [[ "$TASK_STAGE" == check ]] && exit 0
 # Reuse matching single-longest admission on resume; no repeated broad pilots.
 if ! "$TASK_PYTHON" - "$TASK_CONFIG" "$TASK_INDEX" "$TASK_SELECTION" "$TASK_SCORES" "$TASK_OUTPUT/pilot.json" <<'PY'
 import json,sys
 from pathlib import Path
-from workflow_distillation.lora_fp16.cli import prepare,gpu_audit,validate_pilot
-from workflow_distillation.lora_fp16.config import RunConfig
+from workflow_distillation.lora_sft.cli import prepare,gpu_audit,validate_pilot
+from workflow_distillation.lora_sft.config import RunConfig
 config=RunConfig(**json.loads(Path(sys.argv[1]).read_text()))
 identity=prepare(config,Path(sys.argv[2]),Path(sys.argv[3]),Path(sys.argv[4]))[-1]
 validate_pilot(json.loads(Path(sys.argv[5]).read_text()),identity,gpu_audit(config))
 PY
 then
-    "$TASK_PYTHON" -u -m workflow_distillation.lora_fp16 --mode pilot "${TASK_TRAIN[@]}"
+    "$TASK_PYTHON" -u -m workflow_distillation.span_anchor --mode pilot "${TASK_TRAIN[@]}"
 fi
 if [[ "$TASK_FOREGROUND" == true ]]; then
     # Supervisor must own the training process so stopping the service stops its GPU work.
@@ -107,9 +107,9 @@ try:
 except RepositoryNotFoundError:
     api.create_repo(sys.argv[1], private=True)
 PY
-    exec "$TASK_PYTHON" -u -m workflow_distillation.lora_fp16 --mode train \
+    exec "$TASK_PYTHON" -u -m workflow_distillation.span_anchor --mode train \
         "${TASK_TRAIN[@]}" "${TASK_RESUME[@]}" --hub-repo "$TASK_REPO" \
         --hub-prefix bf16-metacurate1180-span-anchor >> "$TASK_OUTPUT/train.log" 2>&1
 fi
-exec "$TASK_PYTHON" -m workflow_distillation.lora_fp16.launch "${TASK_TRAIN[@]}" \
+exec "$TASK_PYTHON" -m workflow_distillation.lora_sft.launch "${TASK_TRAIN[@]}" \
     "${TASK_RESUME[@]}" --hub-repo "$TASK_REPO" --hub-prefix bf16-metacurate1180-span-anchor

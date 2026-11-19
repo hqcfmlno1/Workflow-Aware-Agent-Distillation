@@ -8,10 +8,10 @@ from pathlib import Path
 
 import numpy as np
 
-from workflow_distillation.lora_fp16.config import RunConfig
-from workflow_distillation.lora_fp16.span_cache import atomic_json
-from workflow_distillation.lora_fp16.span_cached_scoring import PrefixScorer
-from workflow_distillation.lora_fp16.span_scoring import build_reference, score_turn
+from workflow_distillation.lora_sft.config import RunConfig
+from workflow_distillation.span_anchor.span_cache import atomic_json
+from workflow_distillation.span_anchor.span_cached_scoring import PrefixScorer
+from workflow_distillation.span_anchor.span_scoring import build_reference, score_turn
 
 
 def main():

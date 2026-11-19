@@ -49,7 +49,7 @@ TASK_COMMON=(--config "$TASK_CONFIG" --selection "$TASK_SELECTION" --index "$TAS
 TASK_TRAIN=("${TASK_COMMON[@]}" "${TASK_RESUME[@]}" --hub-repo "$TASK_HUB_REPO"
             --hub-prefix bf16-metacurate1180-vanilla --prune-hub-history)
 if (( TASK_DRY )); then
-    exec "$TASK_VENV/bin/python" -m workflow_distillation.lora_fp16.launch \
+    exec "$TASK_VENV/bin/python" -m workflow_distillation.lora_sft.launch \
         --dry-run "${TASK_TRAIN[@]}"
 fi
 if [[ ! -f "$TASK_INDEX" ]]; then
@@ -64,7 +64,7 @@ if [[ -e "$TASK_OUTPUT/STOP" ]]; then
     printf 'STOP exists: remove it explicitly when ready to continue this run.\n' >&2
     exit 1
 fi
-"$TASK_VENV/bin/python" -m workflow_distillation.lora_fp16 --mode preflight "${TASK_COMMON[@]}"
+"$TASK_VENV/bin/python" -m workflow_distillation.vanilla_sft --mode preflight "${TASK_COMMON[@]}"
 if (( TASK_CHECK )); then exit 0; fi
 # Admit exactly this corpus/config/software/GPU. This loads no model weights.
 # Reuse a matching pilot after stopping/restarting the same instance.
@@ -72,17 +72,17 @@ if ! "$TASK_VENV/bin/python" - "$TASK_CONFIG" "$TASK_SELECTION" "$TASK_INDEX" "$
 import json
 import sys
 from pathlib import Path
-from workflow_distillation.lora_fp16.config import RunConfig
-from workflow_distillation.lora_fp16.cli import prepare, gpu_audit, validate_pilot
+from workflow_distillation.lora_sft.config import RunConfig
+from workflow_distillation.lora_sft.cli import prepare, gpu_audit, validate_pilot
 config = RunConfig(**json.loads(Path(sys.argv[1]).read_text()))
 identity = prepare(config, Path(sys.argv[3]), Path(sys.argv[2]))[-1]
 validate_pilot(json.loads(Path(sys.argv[4]).read_text()), identity, gpu_audit(config))
 PY
 then
-    "$TASK_VENV/bin/python" -u -m workflow_distillation.lora_fp16 --mode pilot "${TASK_COMMON[@]}"
+    "$TASK_VENV/bin/python" -u -m workflow_distillation.vanilla_sft --mode pilot "${TASK_COMMON[@]}"
 fi
 if [[ "${SFT5090_FOREGROUND:-0}" == 1 ]]; then
     # For a supervisor-owned session. CLI validates an existing private Hub repo.
-    exec "$TASK_VENV/bin/python" -u -m workflow_distillation.lora_fp16 --mode train "${TASK_TRAIN[@]}"
+    exec "$TASK_VENV/bin/python" -u -m workflow_distillation.vanilla_sft --mode train "${TASK_TRAIN[@]}"
 fi
-exec "$TASK_VENV/bin/python" -m workflow_distillation.lora_fp16.launch "${TASK_TRAIN[@]}"
+exec "$TASK_VENV/bin/python" -m workflow_distillation.lora_sft.launch "${TASK_TRAIN[@]}"
