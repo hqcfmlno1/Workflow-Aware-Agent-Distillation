@@ -15,7 +15,7 @@ import numpy as np
 
 from scripts.data.prepare_action_focused_sft import normalize, serialize
 from workflow_distillation.epoch_data import EpochDataset, sha256_file
-from workflow_distillation.lora_fp16.metacurate import load_corpus, write_corpus
+from workflow_distillation.lora_sft.metacurate import load_corpus, write_corpus
 from workflow_distillation.step_mask_corpus import apply_step_mask
 from workflow_distillation.step_mask_token_provenance import annotate_record
 from workflow_distillation.trajectory_step_masking import (

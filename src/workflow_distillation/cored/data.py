@@ -185,7 +185,7 @@ def from_provenance(sample, provenance, turn_scores):
 def prepare_existing(corpus_index, provenance_index, webkd_path):
     """Read verified original corpus and full scoring store; never re-render a template."""
     from workflow_distillation.epoch_data import EpochDataset, sha256_file
-    from workflow_distillation.lora_fp16.span_cache import SpanDataset, load_sidecar
+    from workflow_distillation.span_anchor.span_cache import SpanDataset, load_sidecar
 
     provenance_index, webkd_path = Path(provenance_index), Path(webkd_path)
     source_manifest = json.loads(Path(corpus_index).read_text())

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import torch
 
-from workflow_distillation.lora_fp16.engine import schedule
+from workflow_distillation.lora_sft.engine import schedule
 
 from .artifacts import atomic_json, load_checkpoint, save_checkpoint
 from .objectives import orthogonality, phase1_loss, phase2_loss

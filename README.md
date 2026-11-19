@@ -25,6 +25,17 @@ bình đều theo trajectory. Mục tiêu evaluation là **SWE-bench Verified**.
 
 ## Cấu trúc
 
+| Phương pháp | Code và cách chạy |
+| --- | --- |
+| Base | Qwen3.5-4B gốc, dùng trực tiếp khi đánh giá |
+| Vanilla SFT | [`vanilla_sft/`](src/workflow_distillation/vanilla_sft/) chứa loss CE với trọng số đều trên các token assistant được giám sát. Xem [cấu hình và launcher](configs/training/gpus/rtx5090_32gb/METACURATE_BF16.md). |
+| Span-anchor | [`span_anchor/`](src/workflow_distillation/span_anchor/) chứa tách span, chấm điểm, cache, loss và biến thể step mask. Xem [cấu hình và launcher](configs/training/gpus/rtx5090_32gb/METACURATE_SPAN_ANCHOR.md). |
+| CoReD | [`cored/`](src/workflow_distillation/cored/README.md) chứa chọn span, train expert, chấm điểm council, merge TIES và train student. |
+| Action-focused SFT | [`training/`](src/workflow_distillation/training/README.md) và [`weighted_sft_loss.py`](src/workflow_distillation/weighted_sft_loss.py) chứa pipeline và loss có trọng số theo vai trò token. |
+
+[Trainer LoRA dùng chung](src/workflow_distillation/lora_sft/README.md) giải thích
+các lệnh hiện tại, import tương thích và cách resume checkpoint cũ.
+
 ```text
 configs/                    # Manifest nguồn, bộ lọc, cấu hình thí nghiệm
 scripts/
@@ -34,6 +45,11 @@ scripts/
   cloud/                    # Launcher và phục hồi Kaggle
   evaluation/               # Dành cho entrypoint evaluation
 src/workflow_distillation/
+  cored/                    # CoReD experts, council, TIES và student
+  span_anchor/              # Chấm điểm offline, loss và cache Span-anchor
+  vanilla_sft/              # Loss Vanilla và entrypoint
+  lora_sft/                 # Trainer LoRA FP16/BF16 dùng chung
+  lora_fp16/                # Import và lệnh tương thích với tên package cũ
   training/                 # Pipeline refactor: config/data/model/engine/checkpoint
   *.py                      # Primitive dùng chung và implementation lịch sử đã pin hash
 configs/training/gpus/      # Mỗi GPU một profile.json; xem README từng GPU

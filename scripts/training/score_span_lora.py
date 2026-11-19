@@ -12,16 +12,16 @@ from pathlib import Path
 import numpy as np
 
 from workflow_distillation.epoch_data import sha256_file
-from workflow_distillation.lora_fp16.config import RunConfig
-from workflow_distillation.lora_fp16.metacurate import load_corpus
-from workflow_distillation.lora_fp16.span_cache import ScoreStore, atomic_json
-from workflow_distillation.lora_fp16.span_cached_scoring import (
+from workflow_distillation.lora_sft.config import RunConfig
+from workflow_distillation.lora_sft.metacurate import load_corpus
+from workflow_distillation.span_anchor.span_cache import ScoreStore, atomic_json
+from workflow_distillation.span_anchor.span_cached_scoring import (
     PrefixScorer,
     reference_identity,
     reference_source,
 )
-from workflow_distillation.lora_fp16.span_data import token_weights
-from workflow_distillation.lora_fp16.span_scoring import (
+from workflow_distillation.span_anchor.span_data import token_weights
+from workflow_distillation.span_anchor.span_scoring import (
     build_reference,
     cache_reference,
     score_turn,

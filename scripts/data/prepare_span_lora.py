@@ -9,8 +9,8 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from workflow_distillation.epoch_data import EpochDataset, sha256_file
-from workflow_distillation.lora_fp16.metacurate import load_corpus
-from workflow_distillation.lora_fp16.span_data import SCORING_VERSION, UPSTREAM_REVISION
+from workflow_distillation.lora_sft.metacurate import load_corpus
+from workflow_distillation.span_anchor.span_data import SCORING_VERSION, UPSTREAM_REVISION
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,7 +26,7 @@ def initialize(index, tokenizer, tools, output):
 
 def export(item):
     from scripts.data.prepare_action_focused_sft import normalize
-    from workflow_distillation.lora_fp16.span_data import prepare_record
+    from workflow_distillation.span_anchor.span_data import prepare_record
 
     i, row = item
     sample = DATASET.record(i)

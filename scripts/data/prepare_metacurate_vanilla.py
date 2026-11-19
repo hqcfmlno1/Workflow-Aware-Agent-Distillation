@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from workflow_distillation.epoch_data import sha256_file
-from workflow_distillation.lora_fp16.metacurate import load_corpus, write_corpus
+from workflow_distillation.lora_sft.metacurate import load_corpus, write_corpus
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
