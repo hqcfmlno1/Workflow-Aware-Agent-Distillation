@@ -44,7 +44,7 @@ def test_one_entrypoint_preserves_all_worker_arguments_and_explicit_stop(tmp_pat
         "--resume-from",
         "checkpoint-00001028",
         "--gpu-profile",
-        "configs/training/gpus/rtx4080_32gb/profile.json",
+        "configs/training/gpus/rtx3090_24gb/profile.json",
         "--output",
         str(tmp_path / "run"),
         "--stop-at-step",
@@ -100,7 +100,7 @@ def test_preflight_verifies_real_pool_and_pinned_parent_without_model_load(tmp_p
     plan = build_pool_plan(index, source, cohort)
     pool = tmp_path / "pool.json"
     pool.write_text(json.dumps(plan))
-    profile_path = Path("configs/training/gpus/rtx4080_32gb/profile.json")
+    profile_path = Path("configs/training/gpus/rtx3090_24gb/profile.json")
     profile = load_profile(profile_path)
     hashes = source_hashes()
     parent_identity = {
@@ -202,7 +202,7 @@ def test_preflight_verifies_real_pool_and_pinned_parent_without_model_load(tmp_p
         with pytest.raises(ValueError, match="exact child"):
             prepare(args)
     modified = copy.deepcopy(profile.to_dict())
-    modified["gpu_budget_bytes"] = 2 * 2**30
+    modified.update(activation_storage="hybrid", gpu_budget_bytes=2 * 2**30)
     args.gpu_profile = tmp_path / "different-profile.json"
     args.gpu_profile.write_text(json.dumps(modified))
     with pytest.raises(ValueError, match="exact child"):

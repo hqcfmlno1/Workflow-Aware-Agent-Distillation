@@ -142,7 +142,7 @@ def test_parent_validation_rejects_objective_data_and_package_drift(tmp_path):
     from workflow_distillation.training.config import Experiment, load_profile
     from workflow_distillation.training.identity import package_versions
 
-    profile = load_profile(Path("configs/training/gpus/rtx4080_32gb/profile.json"))
+    profile = load_profile(Path("configs/training/gpus/rtx3090_24gb/profile.json"))
     plan = {"ordered_indices": [0, 1, 2, 3], "source_index_sha256": "data"}
     # Use real historical source hashes and installed versions for a CPU-safe audit.
     from workflow_distillation.training.compatibility import source_hashes
@@ -187,6 +187,10 @@ def test_parent_validation_rejects_objective_data_and_package_drift(tmp_path):
         "progress": {"global_step": 1, "next_batch": 1, "samples_consumed": 4},
     }
     validate_parent(parent, profile, plan, 42)
+    tampered = copy.deepcopy(parent)
+    tampered["identity"]["settings"]["gpu_execution"]["runtime_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="execution adapter checksum"):
+        validate_parent(tampered, profile, plan, 42)
     for target, key, value in [
         ("config", "rank", 16),
         ("config", "learning_rate", 1e-3),
