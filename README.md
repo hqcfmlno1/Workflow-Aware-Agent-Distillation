@@ -1,121 +1,74 @@
-# Workflow-Aware-Agent-Distillation
+# Workflow-Aware Agent Distillation
 
-Baseline **Action-focused SFT** cho student **Qwen3.5-4B**, dùng successful
-trajectories của teacher **Qwen3.8-27B Thinking** từ **NVIDIA Open-SWE-Traces
-v1.2 / mini-SWE-agent**. Loss lấy ý tưởng từ SmartAD: weighted-token CE cho
-reasoning/content/action/submit với trọng số **1 / 0.75 / 1.5 / 2**, rồi trung
-bình đều theo trajectory. Mục tiêu evaluation là **SWE-bench Verified**.
+This repository studies how to distill software engineering workflows into
+[Qwen3.5-4B](https://huggingface.co/Qwen/Qwen3.5-4B). The student learns from
+successful coding-agent trajectories that include reasoning, tool calls, tool
+outputs, and patch submission. We evaluate the resulting agents on fixed
+subsets of [SWE-bench Verified](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified).
 
-## Trạng thái hiện tại
+## Training methods
 
-- Training đã chạy trên Kaggle và Vast. Thông tin về các run trước đây nằm trong
-  [tài liệu tương thích](legacy/README.md).
-- Đã chuẩn bị cohort ưu tiên đa dạng đến batch **2.000 / 4.000 trajectory**:
-  **3.866 task**, **1.501 repo**. Giữ nguyên prefix đã học; thêm 2.610 trajectory
-  từ các task mới, mỗi trajectory bổ sung dưới 28.000 token.
-- Cohort đã được tích hợp trên Vast và mở rộng sang pool còn lại, giữ nguyên
-  prefix đã học. Global batch hiện dùng 4 (2 trajectory/GPU).
-- Luồng refactor local có một entrypoint [`scripts/train.py`](scripts/train.py),
-  module [`training/`](src/workflow_distillation/training/) và profile riêng theo GPU.
-  **Chưa triển khai bản refactor lên server; cần CUDA migration pilot trước khi dùng.**
-  Bắt đầu review tại [bản đồ training](docs/training.md).
-- Chưa hoàn tất epoch hoặc có kết quả evaluation student.
+| Method | What it trains | Where to start |
+| --- | --- | --- |
+| Base | The original Qwen3.5-4B checkpoint serves as the evaluation baseline. | [Pinned base model and evaluation settings](configs/evaluation/verified10_bf16_triplet.json) |
+| Action-focused SFT | Weights reasoning, content, tool actions, and submission tokens by `1.0`, `0.75`, `1.5`, and `2.0`, respectively. Each trajectory contributes equally after token-loss normalization. | [Loss design](docs/action_focused_sft_loss_design.md) and [training guide](docs/training.md) |
+| Vanilla LoRA | Gives all supervised assistant tokens equal weight within each trajectory. | [Implementation](src/workflow_distillation/vanilla_sft/) and [MetaCurate runbook](configs/training/gpus/rtx5090_32gb/METACURATE_BF16.md) |
+| Span-anchor | Scores reasoning spans by their effect on predicting the next teacher action. Training combines span-weighted cross-entropy with a target-token anchor to the frozen base. | [Implementation](src/workflow_distillation/span_anchor/) and [runbook](configs/training/gpus/rtx5090_32gb/METACURATE_SPAN_ANCHOR.md) |
+| Span-anchor with step masking | Keeps flagged assistant steps in context while excluding their tokens from both training losses. | [Step review policy](docs/research/deepseek1180_llm_step_masking_2026-11-07.md) and [training guide](docs/research/span_anchor_stepmask_training_2026-11-07.md) |
+| CoReD | Trains a council of LoRA experts, uses their predictions to weight reasoning supervision, merges the expert updates with TIES, and trains a student adapter on the merged base. | [Method and stage commands](src/workflow_distillation/cored/README.md) |
 
-## Cấu trúc
+The original Action-focused SFT pipeline uses successful Qwen3.8-27B Thinking
+runs from NVIDIA Open-SWE-Traces v1.2 with mini-SWE-agent. The MetaCurate
+experiments use a separate corpus of 1,180 successful trajectories across 477
+tasks. Training and benchmark overlap is checked using normalized repository
+and pull request identifiers. See the [source manifest](configs/datasets/nvidia_mini_swe_agent_v1_2_action_focused_sft.json),
+[data inventory](data/README.md), and [Verified overlap audit](reports/swebench_verified_overlap_2026-10-12/).
 
-| Phương pháp | Code và cách chạy |
-| --- | --- |
-| Base | Qwen3.5-4B gốc, dùng trực tiếp khi đánh giá |
-| Vanilla SFT | [`vanilla_sft/`](src/workflow_distillation/vanilla_sft/) chứa loss CE với trọng số đều trên các token assistant được giám sát. Xem [cấu hình và launcher](configs/training/gpus/rtx5090_32gb/METACURATE_BF16.md). |
-| Span-anchor | [`span_anchor/`](src/workflow_distillation/span_anchor/) chứa tách span, chấm điểm, cache, loss và biến thể step mask. Xem [cấu hình và launcher](configs/training/gpus/rtx5090_32gb/METACURATE_SPAN_ANCHOR.md). |
-| CoReD | [`cored/`](src/workflow_distillation/cored/README.md) chứa chọn span, train expert, chấm điểm council, merge TIES và train student. |
-| Action-focused SFT | [`training/`](src/workflow_distillation/training/README.md) và [`weighted_sft_loss.py`](src/workflow_distillation/weighted_sft_loss.py) chứa pipeline và loss có trọng số theo vai trò token. |
+## Evaluation
 
-[Trainer LoRA dùng chung](src/workflow_distillation/lora_sft/README.md) giải thích
-các lệnh hiện tại, import tương thích và cách resume checkpoint cũ.
+The repository tracks the task selections for the [10-task comparison](configs/evaluation/verified10_bf16_triplet.json)
+and the [20-task diagnostic pilot](configs/evaluation/verified20_span_anchor.json).
+The [step-mask evaluation harness](cloud/vast/verified10_stepmask/README.md)
+reuses the original ten tasks and grades submitted patches with the official
+SWE-bench tests. Run outputs record task outcomes, generation time, token counts,
+and tool calls. Infrastructure errors are recorded separately from graded failures.
 
-```text
-configs/                    # Manifest nguồn, bộ lọc, cấu hình thí nghiệm
-scripts/
-  train.py                  # Entrypoint refactor: preflight / launch / worker
-  data/                     # Chuẩn bị dữ liệu và lịch chọn trajectory trên CPU
-  training/                 # Pilot, tải checkpoint và launcher tương thích lịch sử
-  cloud/                    # Launcher và phục hồi Kaggle
-  evaluation/               # Dành cho entrypoint evaluation
-src/workflow_distillation/
-  cored/                    # CoReD experts, council, TIES và student
-  span_anchor/              # Chấm điểm offline, loss và cache Span-anchor
-  vanilla_sft/              # Loss Vanilla và entrypoint
-  lora_sft/                 # Trainer LoRA FP16/BF16 dùng chung
-  lora_fp16/                # Import và lệnh tương thích với tên package cũ
-  training/                 # Pipeline refactor: config/data/model/engine/checkpoint
-  *.py                      # Primitive dùng chung và implementation lịch sử đã pin hash
-configs/training/gpus/      # Mỗi GPU một profile.json; xem README từng GPU
-legacy/first_run/           # Inventory hash; source lịch sử giữ ở đường dẫn gốc
-cloud/kaggle/               # Bootstrap/recovery và lịch continuation hiện có
-data/
-  raw/                      # Cache nguồn và tokenizer
-  interim/                  # Export và dữ liệu trung gian
-  processed/
-    first_run_epoch_sft/    # index.json + tokens.bin + groups.bin gốc
-    first_run_diverse_4000/ # Manifest cohort đến batch 2.000; tham chiếu binary gốc
-    first_run_diverse_remaining/ # Pool mở rộng, bảo toàn cohort/prefix đã học
-outputs/
-  training/first run/       # Log, metrics, checkpoint và payload triển khai phát sinh
-  evaluation/               # Kết quả benchmark
-  analysis/                 # Phân tích phát sinh
-reports/                    # Bằng chứng nghiên cứu/overlap được lưu trong Git
-notebooks/                  # Phân tích NVIDIA trajectories
-```
+The final CoReD checkpoint resolved **11 of 27 tasks** in a separate diagnostic
+run. This is a subset result. The historical baseline runs used different budgets
+and continuation rules, which limits direct comparison.
 
-**Đầu vào train nằm trong `data/`; kết quả chạy nằm trong `outputs/`.** Manifest
-cohort chỉ chọn thứ tự record từ binary gốc, không nhân bản dữ liệu. Những bộ
-processed cũ được giữ làm nguồn tái lập; xem [danh mục dữ liệu](data/README.md).
-Artifact lớn trong `data/` và `outputs/` được Git bỏ qua, trừ README.
+## Getting started
 
-## Chuẩn bị cohort hiện tại
+Use Python 3.11. From the repository root, install the data dependencies and
+inspect the method entrypoints. The CoReD command also loads the training
+dependencies:
 
 ```bash
 uv sync --extra data
-uv run python -m scripts.data.prepare_diverse_continuation \
-  --index data/processed/first_run_epoch_sft/index.json \
-  --source-plan cloud/kaggle/recovery/continuation-plan.json \
-  --resume-step 695 --target-step 2000 --verify-binaries \
-  --output data/processed/first_run_diverse_4000
+uv run python -m workflow_distillation.vanilla_sft --help
+uv run python -m workflow_distillation.span_anchor --help
+uv run --extra data --extra train python -m workflow_distillation.cored --help
 ```
 
-Lệnh chỉ chuẩn bị/kiểm tra manifest trên CPU. Mốc resume phải được đối chiếu
-với checkpoint thật trước khi train; nếu checkpoint mới hơn, tạo cohort mới
-giữ toàn bộ prefix đã học. Không sửa index, binary hay lịch continuation gốc.
+Use the method runbooks for the exact model revision, input preparation, GPU
+dependencies, and checkpoint commands. Vanilla and Span-anchor share the
+[FP16/BF16 LoRA trainer](src/workflow_distillation/lora_sft/README.md). The
+Action-focused QLoRA continuation uses [`scripts/train.py`](scripts/train.py).
+For exact checkpoint resume, use the source revision and environment recorded
+for that run. See the [checkpoint guide](docs/training_checkpoint_resume.md).
 
-## Nguồn và chống trùng benchmark
+## Repository layout
 
-[Manifest nguồn](configs/datasets/nvidia_mini_swe_agent_v1_2_action_focused_sft.json)
-pin dataset/revision, teacher/harness và quy tắc partition. Loại task trùng
-benchmark theo repository + PR chuẩn hóa trước khi chuẩn bị train; không đưa
-reference patch vào đầu vào student. Giữ các
-[báo cáo OmniCode](docs/data_overlap_v1_2_2026-10-11.md) và
-[audit SWE-bench Verified](reports/swebench_verified_overlap_2026-10-12/)
-để tái lập bộ lọc.
+```text
+src/workflow_distillation/  Training methods, losses, and shared trainer code
+configs/                    Dataset manifests, training recipes, and evaluation task lists
+scripts/                    Data preparation, scoring, training, and checkpoint tools
+cloud/                      Kaggle and Vast launchers and evaluation infrastructure
+docs/                       Method notes and runbooks
+reports/                    Tracked dataset and benchmark-overlap audits
+legacy/                     Source fingerprints and compatibility notes
+```
 
-Collector OmniCode/OpenAI, script phụ trợ, Dockerfile và hai notebook phân tích
-collector đã được gỡ vì không còn dùng. Các phiên bản cũ vẫn có trong lịch sử Git.
-OmniCode task keys phục vụ chống trùng vẫn được giữ.
-
-Xem thêm [scripts](scripts/README.md), [output](outputs/README.md),
-[thiết kế loss](docs/action_focused_sft_loss_design.md) và
-[pipeline chuẩn bị ban đầu](docs/action_focused_sft_phase1.md).
-
-## Span-anchor với mask các step xấu
-
-Nhánh `sft/span-anchor-step-mask` dùng LLM đánh giá các assistant step trong
-1.180 trajectory DeepSeek thành công. Step được đánh dấu vẫn nằm trong context,
-nhưng không nhận supervision từ cả loss CE lẫn anchor. Các trọng số span đã chấm
-được ánh xạ theo vị trí target còn lại, không chấm điểm lại.
-
-- [Policy và runner đánh giá step](docs/research/deepseek1180_llm_step_masking_2026-11-07.md).
-- [Chuẩn bị dữ liệu, cache và train hai epoch](docs/research/span_anchor_stepmask_training_2026-11-07.md).
-- [Đánh giá checkpoint mới trên đúng 10 task Verified](cloud/vast/verified10_stepmask/README.md).
-
-Annotation, corpus, score binaries, checkpoint và log nằm ngoài Git. Code không
-tự gọi teacher hay thuê GPU khi clone; các thao tác tốn phí phải được chạy tường minh.
+Generated corpora, model weights, caches, checkpoints, and run logs are stored
+outside Git. Local artifacts are typically under `data/`, `outputs/`, or
+`draft/`. See the [output inventory](outputs/README.md) for where to look.
